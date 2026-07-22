@@ -476,6 +476,16 @@ void WebviewHandler::reload(int browserId) {
     }
 }
 
+void WebviewHandler::wasHidden(int browserId, bool hidden)
+{
+    auto it = browser_map_.find(browserId);
+    if (it == browser_map_.end() || !it->second.browser.get())
+    {
+        return;
+    }
+    it->second.browser->GetHost()->WasHidden(hidden);
+}
+
 void WebviewHandler::openDevTools(int browserId) {
     auto it = browser_map_.find(browserId);
     if (it != browser_map_.end()) {

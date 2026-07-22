@@ -351,6 +351,13 @@ namespace webview_cef {
 			m_handler->reload(browserId);
 			result(1, nullptr);
 		}
+		else if (name.compare("wasHidden") == 0)
+		{
+			int browserId = int(webview_value_get_int(webview_value_get_list_value(values, 0)));
+			bool hidden = webview_value_get_bool(webview_value_get_list_value(values, 1));
+			m_handler->wasHidden(browserId, hidden);
+			result(1, nullptr);
+		}
 		else if (name.compare("openDevTools") == 0) {			
 			int browserId = int(webview_value_get_int(values));
 			m_handler->openDevTools(browserId);
