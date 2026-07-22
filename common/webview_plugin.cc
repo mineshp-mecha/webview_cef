@@ -245,7 +245,7 @@ namespace webview_cef {
                 }
             };
 
-            m_handler->onBeforeDownloadEvent = [=, this](int nBrowserId, uint32_t downloadId, std::string url, std::string suggestedName, std::string contentDisposition, std::string mimeType, int64_t totalBytes)
+            m_handler->onBeforeDownloadEvent = [=](int nBrowserId, uint32_t downloadId, std::string url, std::string suggestedName, std::string contentDisposition, std::string mimeType, int64_t totalBytes)
             {
                 if (m_invokeFunc)
                 {
@@ -276,7 +276,7 @@ namespace webview_cef {
                 }
             };
 
-            m_handler->onDownloadUpdatedEvent = [=, this](int nBrowserId, uint32_t downloadId, std::string url, std::string fullPath, int64_t receivedBytes, int64_t totalBytes, int64_t currentSpeed, int percentComplete, bool isInProgress, bool isComplete, bool isCanceled, bool isInterrupted, int interruptReason)
+            m_handler->onDownloadUpdatedEvent = [=](int nBrowserId, uint32_t downloadId, std::string url, std::string fullPath, int64_t receivedBytes, int64_t totalBytes, int64_t currentSpeed, int percentComplete, bool isInProgress, bool isComplete, bool isCanceled, bool isInterrupted, int interruptReason)
             {
                 if (m_invokeFunc)
                 {
