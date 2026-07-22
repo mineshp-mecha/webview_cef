@@ -153,7 +153,7 @@ public:
     void CloseAllBrowsers(bool force_close);
 
     void closeBrowser(int browserId);
-    void createBrowser(std::string url, std::function<void(int)> callback);
+    void createBrowser(std::string url, bool isPrivate, std::function<void(int)> callback);
 
     // Drives one external BeginFrame for every live browser (GPU path only).
     // Marshals to the CEF UI thread; safe to call from any thread.

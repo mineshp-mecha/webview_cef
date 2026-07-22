@@ -74,14 +74,14 @@ class WebViewController extends ValueNotifier<bool> {
       _onImeCompositionRangeChangedMessage;
 
   /// Initializes the underlying platform view.
-  Future<void> initialize(String url) async {
+  Future<void> initialize(String url, {bool isPrivate = false}) async {
     if (_isDisposed) {
       return Future<void>.value();
     }
     _creatingCompleter = Completer<void>();
     try {
       await WebviewManager().ready;
-      List args = await _pluginChannel.invokeMethod('create', url);
+      List args = await _pluginChannel.invokeMethod('create', [url, isPrivate]);
       _browserId = args[0] as int;
       _textureId = args[1] as int;
       WebviewManager().onBrowserCreated(_index, _browserId);
