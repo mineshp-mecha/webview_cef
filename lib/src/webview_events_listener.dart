@@ -17,12 +17,40 @@ typedef LoadStopCb = void Function(WebViewController controller, String url);
 typedef OnConsoleMessage = void Function(
     int level, String message, String source, int line);
 
+typedef OnBeforeDownloadCb = void Function(
+  WebViewController controller,
+  int downloadId,
+  String url,
+  String suggestedName,
+  String contentDisposition,
+  String mimeType,
+  int totalBytes,
+);
+
+typedef OnDownloadUpdatedCb = void Function(
+  WebViewController controller,
+  int downloadId,
+  String url,
+  String fullPath,
+  int receivedBytes,
+  int totalBytes,
+  int currentSpeed,
+  int percentComplete,
+  bool isInProgress,
+  bool isComplete,
+  bool isCanceled,
+  bool isInterrupted,
+  int interruptReason,
+);
+
 class WebviewEventsListener {
   TitleChangeCb? onTitleChanged;
   UrlChangeCb? onUrlChanged;
   OnConsoleMessage? onConsoleMessage;
   LoadStartCb? onLoadStart;
   LoadStopCb? onLoadEnd;
+  OnBeforeDownloadCb? onBeforeDownload;
+  OnDownloadUpdatedCb? onDownloadUpdated;
 
   WebviewEventsListener({
     this.onTitleChanged,
@@ -30,5 +58,7 @@ class WebviewEventsListener {
     this.onConsoleMessage,
     this.onLoadStart,
     this.onLoadEnd,
+    this.onBeforeDownload,
+    this.onDownloadUpdated,
   });
 }

@@ -233,6 +233,102 @@ void WebviewHandler::OnLoadEnd(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame
     return;
 }
 
+bool WebviewHandler::OnBeforeDownload(CefRefPtr<CefBrowser> browser,
+                                      CefRefPtr<CefDownloadItem> download_item,
+                                      const CefString& suggested_name,
+                                      CefRefPtr<CefBeforeDownloadCallback> callback) {
+    CEF_REQUIRE_UI_THREAD();
+    if (!download_item || !download_item->IsValid()) {
+        return false;
+    }
+    uint32_t download_id = download_item->GetId();
+    download_before_callbacks_[download_id] = callback;
+
+    if (onBeforeDownloadEvent) {
+        onBeforeDownloadEvent(
+            browser->GetIdentifier(),
+            download_id,
+            download_item->GetURL().ToString(),
+            suggested_name.ToString(),
+            download_item->GetContentDisposition().ToString(),
+            download_item->GetMimeType().ToString(),
+            download_item->GetTotalBytes()
+        );
+    }
+    return true;
+}
+
+void WebviewHandler::OnDownloadUpdated(CefRefPtr<CefBrowser> browser,
+                                       CefRefPtr<CefDownloadItem> download_item,
+                                       CefRefPtr<CefDownloadItemCallback> callback) {
+    CEF_REQUIRE_UI_THREAD();
+    if (!download_item || !download_item->IsValid()) {
+        return;
+    }
+    uint32_t download_id = download_item->GetId();
+    download_item_callbacks_[download_id] = callback;
+
+    if (onDownloadUpdatedEvent) {
+        onDownloadUpdatedEvent(
+            browser->GetIdentifier(),
+            download_id,
+            download_item->GetURL().ToString(),
+            download_item->GetFullPath().ToString(),
+            download_item->GetReceivedBytes(),
+            download_item->GetTotalBytes(),
+            download_item->GetCurrentSpeed(),
+            download_item->GetPercentComplete(),
+            download_item->IsInProgress(),
+            download_item->IsComplete(),
+            download_item->IsCanceled(),
+            download_item->IsInterrupted(),
+            static_cast<int>(download_item->GetInterruptReason())
+        );
+    }
+
+    if (!download_item->IsInProgress()) {
+        download_item_callbacks_.erase(download_id);
+        download_before_callbacks_.erase(download_id);
+    }
+}
+
+void WebviewHandler::continueDownload(uint32_t downloadId, const std::string& downloadPath, bool showDialog) {
+    auto it = download_before_callbacks_.find(downloadId);
+    if (it != download_before_callbacks_.end()) {
+        if (it->second) {
+            it->second->Continue(CefString(downloadPath), showDialog);
+        }
+        download_before_callbacks_.erase(it);
+    }
+}
+
+void WebviewHandler::cancelDownload(uint32_t downloadId) {
+    auto it = download_item_callbacks_.find(downloadId);
+    if (it != download_item_callbacks_.end()) {
+        if (it->second) {
+            it->second->Cancel();
+        }
+    }
+}
+
+void WebviewHandler::pauseDownload(uint32_t downloadId) {
+    auto it = download_item_callbacks_.find(downloadId);
+    if (it != download_item_callbacks_.end()) {
+        if (it->second) {
+            it->second->Pause();
+        }
+    }
+}
+
+void WebviewHandler::resumeDownload(uint32_t downloadId) {
+    auto it = download_item_callbacks_.find(downloadId);
+    if (it != download_item_callbacks_.end()) {
+        if (it->second) {
+            it->second->Resume();
+        }
+    }
+}
+
 void WebviewHandler::CloseAllBrowsers(bool force_close) {
     if (browser_map_.empty()){
         return;
