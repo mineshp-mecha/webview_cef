@@ -281,8 +281,13 @@ namespace webview_cef {
 			result(1, nullptr);
 		}
 		else if (name.compare("create") == 0) {
-			std::string url = webview_value_get_string(values);
-			m_handler->createBrowser(url, [=, this](int browserId) {
+			WValue* url_val = webview_value_get_list_value(values, 0);
+			WValue* private_val = webview_value_get_list_value(values, 1);
+
+			std::string url = webview_value_get_string(url_val);
+			bool isPrivate = webview_value_get_bool(private_val);
+
+			m_handler->createBrowser(url, isPrivate, [=](int browserId) {
 				std::shared_ptr<WebviewTexture> renderer = m_createTextureFunc();
 				m_renderers[browserId] = renderer;
 				WValue	*response = webview_value_new_list();

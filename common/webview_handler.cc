@@ -255,11 +255,11 @@ void WebviewHandler::closeBrowser(int browserId)
     }
 }
 
-void WebviewHandler::createBrowser(std::string url, std::function<void(int)> callback)
+void WebviewHandler::createBrowser(std::string url, bool isPrivate, std::function<void(int)> callback)
 {
 #ifndef OS_MAC
     if(!CefCurrentlyOn(TID_UI)) {
-		CefPostTask(TID_UI, base::BindOnce(&WebviewHandler::createBrowser, this, url, callback));
+		CefPostTask(TID_UI, base::BindOnce(&WebviewHandler::createBrowser, this, url, isPrivate, callback));
 		return;
 	}
 #endif
@@ -281,7 +281,16 @@ void WebviewHandler::createBrowser(std::string url, std::function<void(int)> cal
     // an IDXGIOutput vblank wait, macOS from a CVDisplayLink.
     window_info.external_begin_frame_enabled = true;
 #endif
-    callback(CefBrowserHost::CreateBrowserSync(window_info, this, url, browser_settings, nullptr, nullptr)->GetIdentifier());
+
+    // Create the Request Context
+    CefRefPtr<CefRequestContext> request_context = nullptr;
+    if (isPrivate) {
+        CefRequestContextSettings context_settings;
+        // Leaving context_settings.cache_path empty makes it "Incognito"
+        request_context = CefRequestContext::CreateContext(context_settings, nullptr);
+    }
+
+    callback(CefBrowserHost::CreateBrowserSync(window_info, this, url, browser_settings, nullptr, request_context)->GetIdentifier());
 #ifdef WEBVIEW_CEF_GPU_TEXTURE
     // The GPU shared-texture path is the only render path on this build (no
     // OnPaint fallback). If no accelerated frame arrives shortly, the GPU
