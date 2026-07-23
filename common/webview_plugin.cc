@@ -245,6 +245,89 @@ namespace webview_cef {
                 }
             };
 
+            m_handler->onBeforeDownloadEvent = [=](int nBrowserId, uint32_t downloadId, std::string url, std::string suggestedName, std::string contentDisposition, std::string mimeType, int64_t totalBytes)
+            {
+                if (m_invokeFunc)
+                {
+                    WValue* bId = webview_value_new_int(nBrowserId);
+                    WValue* dId = webview_value_new_int(int64_t(downloadId));
+                    WValue* wUrl = webview_value_new_string(const_cast<char*>(url.c_str()));
+                    WValue* wName = webview_value_new_string(const_cast<char*>(suggestedName.c_str()));
+                    WValue* wDisp = webview_value_new_string(const_cast<char*>(contentDisposition.c_str()));
+                    WValue* wMime = webview_value_new_string(const_cast<char*>(mimeType.c_str()));
+                    WValue* wTotal = webview_value_new_int(totalBytes);
+                    WValue* retMap = webview_value_new_map();
+                    webview_value_set_string(retMap, "browserId", bId);
+                    webview_value_set_string(retMap, "downloadId", dId);
+                    webview_value_set_string(retMap, "url", wUrl);
+                    webview_value_set_string(retMap, "suggestedName", wName);
+                    webview_value_set_string(retMap, "contentDisposition", wDisp);
+                    webview_value_set_string(retMap, "mimeType", wMime);
+                    webview_value_set_string(retMap, "totalBytes", wTotal);
+                    m_invokeFunc("onBeforeDownload", retMap);
+                    webview_value_unref(bId);
+                    webview_value_unref(dId);
+                    webview_value_unref(wUrl);
+                    webview_value_unref(wName);
+                    webview_value_unref(wDisp);
+                    webview_value_unref(wMime);
+                    webview_value_unref(wTotal);
+                    webview_value_unref(retMap);
+                }
+            };
+
+            m_handler->onDownloadUpdatedEvent = [=](int nBrowserId, uint32_t downloadId, std::string url, std::string fullPath, int64_t receivedBytes, int64_t totalBytes, int64_t currentSpeed, int percentComplete, bool isInProgress, bool isComplete, bool isCanceled, bool isInterrupted, int interruptReason)
+            {
+                if (m_invokeFunc)
+                {
+                    WValue* bId = webview_value_new_int(nBrowserId);
+                    WValue* dId = webview_value_new_int(int64_t(downloadId));
+                    WValue* wUrl = webview_value_new_string(const_cast<char*>(url.c_str()));
+                    WValue* wPath = webview_value_new_string(const_cast<char*>(fullPath.c_str()));
+                    WValue* wRecv = webview_value_new_int(receivedBytes);
+                    WValue* wTotal = webview_value_new_int(totalBytes);
+                    WValue* wSpeed = webview_value_new_int(currentSpeed);
+                    WValue* wPercent = webview_value_new_int(percentComplete);
+                    WValue* wInProgress = webview_value_new_bool(isInProgress);
+                    WValue* wComplete = webview_value_new_bool(isComplete);
+                    WValue* wCanceled = webview_value_new_bool(isCanceled);
+                    WValue* wInterrupted = webview_value_new_bool(isInterrupted);
+                    WValue* wReason = webview_value_new_int(interruptReason);
+
+                    WValue* retMap = webview_value_new_map();
+                    webview_value_set_string(retMap, "browserId", bId);
+                    webview_value_set_string(retMap, "downloadId", dId);
+                    webview_value_set_string(retMap, "url", wUrl);
+                    webview_value_set_string(retMap, "fullPath", wPath);
+                    webview_value_set_string(retMap, "receivedBytes", wRecv);
+                    webview_value_set_string(retMap, "totalBytes", wTotal);
+                    webview_value_set_string(retMap, "currentSpeed", wSpeed);
+                    webview_value_set_string(retMap, "percentComplete", wPercent);
+                    webview_value_set_string(retMap, "isInProgress", wInProgress);
+                    webview_value_set_string(retMap, "isComplete", wComplete);
+                    webview_value_set_string(retMap, "isCanceled", wCanceled);
+                    webview_value_set_string(retMap, "isInterrupted", wInterrupted);
+                    webview_value_set_string(retMap, "interruptReason", wReason);
+
+                    m_invokeFunc("onDownloadUpdated", retMap);
+
+                    webview_value_unref(bId);
+                    webview_value_unref(dId);
+                    webview_value_unref(wUrl);
+                    webview_value_unref(wPath);
+                    webview_value_unref(wRecv);
+                    webview_value_unref(wTotal);
+                    webview_value_unref(wSpeed);
+                    webview_value_unref(wPercent);
+                    webview_value_unref(wInProgress);
+                    webview_value_unref(wComplete);
+                    webview_value_unref(wCanceled);
+                    webview_value_unref(wInterrupted);
+                    webview_value_unref(wReason);
+                    webview_value_unref(retMap);
+                }
+            };
+
 			m_init = true;
 		}
 	}
@@ -260,6 +343,8 @@ namespace webview_cef {
 		m_handler->onJavaScriptChannelMessage = nullptr;
 		m_handler->onFocusedNodeChangeMessage = nullptr;
 		m_handler->onImeCompositionRangeChangedMessage = nullptr;
+		m_handler->onBeforeDownloadEvent = nullptr;
+		m_handler->onDownloadUpdatedEvent = nullptr;
 		m_init = false;
 	}
 
@@ -556,6 +641,28 @@ namespace webview_cef {
 				result(1, retValue);
 				webview_value_unref(retValue);
 			});
+		}
+		else if (name.compare("continueDownload") == 0) {
+			uint32_t downloadId = uint32_t(webview_value_get_int(webview_value_get_list_value(values, 0)));
+			const auto downloadPath = webview_value_get_string(webview_value_get_list_value(values, 1));
+			bool showDialog = webview_value_get_bool(webview_value_get_list_value(values, 2));
+			m_handler->continueDownload(downloadId, downloadPath ? downloadPath : "", showDialog);
+			result(1, nullptr);
+		}
+		else if (name.compare("cancelDownload") == 0) {
+			uint32_t downloadId = uint32_t(webview_value_get_int(values));
+			m_handler->cancelDownload(downloadId);
+			result(1, nullptr);
+		}
+		else if (name.compare("pauseDownload") == 0) {
+			uint32_t downloadId = uint32_t(webview_value_get_int(values));
+			m_handler->pauseDownload(downloadId);
+			result(1, nullptr);
+		}
+		else if (name.compare("resumeDownload") == 0) {
+			uint32_t downloadId = uint32_t(webview_value_get_int(values));
+			m_handler->resumeDownload(downloadId);
+			result(1, nullptr);
 		}
 		else {
 			result = 0;

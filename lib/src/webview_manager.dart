@@ -164,11 +164,70 @@ class WebviewManager extends ValueNotifier<bool> {
         _webViews[browserId] as WebViewController;
         _webViews[browserId]?.listener?.onLoadEnd?.call(controller, urlId);
         return;
+      case 'onBeforeDownload':
+        int browserId = call.arguments['browserId'] as int;
+        WebViewController? controller = _webViews[browserId];
+        if (controller != null) {
+          controller.listener?.onBeforeDownload?.call(
+            controller,
+            call.arguments['downloadId'] as int,
+            call.arguments['url'] as String,
+            call.arguments['suggestedName'] as String,
+            call.arguments['contentDisposition'] as String,
+            call.arguments['mimeType'] as String,
+            call.arguments['totalBytes'] as int,
+          );
+        }
+        return;
+      case 'onDownloadUpdated':
+        int browserId = call.arguments['browserId'] as int;
+        WebViewController? controller = _webViews[browserId];
+        if (controller != null) {
+          controller.listener?.onDownloadUpdated?.call(
+            controller,
+            call.arguments['downloadId'] as int,
+            call.arguments['url'] as String,
+            call.arguments['fullPath'] as String,
+            call.arguments['receivedBytes'] as int,
+            call.arguments['totalBytes'] as int,
+            call.arguments['currentSpeed'] as int,
+            call.arguments['percentComplete'] as int,
+            call.arguments['isInProgress'] as bool,
+            call.arguments['isComplete'] as bool,
+            call.arguments['isCanceled'] as bool,
+            call.arguments['isInterrupted'] as bool,
+            call.arguments['interruptReason'] as int,
+          );
+        }
+        return;
       default:
     }
   }
 
-  Future<void> _injectUserScriptIfNeeds(int browserId, List<UserScript> scripts) async {
+  Future<void> continueDownload(int downloadId, String downloadPath,
+      {bool showDialog = false}) async {
+    assert(value);
+    return pluginChannel.invokeMethod(
+        'continueDownload', [downloadId, downloadPath, showDialog]);
+  }
+
+  Future<void> cancelDownload(int downloadId) async {
+    assert(value);
+    return pluginChannel.invokeMethod('cancelDownload', downloadId);
+  }
+
+  Future<void> pauseDownload(int downloadId) async {
+    assert(value);
+    return pluginChannel.invokeMethod('pauseDownload', downloadId);
+  }
+
+  Future<void> resumeDownload(int downloadId) async {
+    assert(value);
+    return pluginChannel.invokeMethod('resumeDownload', downloadId);
+  }
+
+  Future<void> _injectUserScriptIfNeeds(
+      int browserId, List<UserScript> scripts) async {
     if (scripts.isEmpty) return;
 
     await _webViews[browserId]?.ready;

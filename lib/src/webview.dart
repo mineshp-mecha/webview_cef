@@ -237,6 +237,28 @@ class WebViewController extends ValueNotifier<bool> {
         .invokeMethod('evaluateJavascript', [_browserId, code]);
   }
 
+  Future<void> continueDownload(int downloadId, String downloadPath,
+      {bool showDialog = false}) async {
+    if (_isDisposed) return;
+    return WebviewManager()
+        .continueDownload(downloadId, downloadPath, showDialog: showDialog);
+  }
+
+  Future<void> cancelDownload(int downloadId) async {
+    if (_isDisposed) return;
+    return WebviewManager().cancelDownload(downloadId);
+  }
+
+  Future<void> pauseDownload(int downloadId) async {
+    if (_isDisposed) return;
+    return WebviewManager().pauseDownload(downloadId);
+  }
+
+  Future<void> resumeDownload(int downloadId) async {
+    if (_isDisposed) return;
+    return WebviewManager().resumeDownload(downloadId);
+  }
+
   /// Moves the virtual cursor to [position].
   Future<void> _cursorMove(Offset position) async {
     if (_isDisposed) {

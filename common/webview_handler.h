@@ -6,6 +6,7 @@
 #define CEF_TESTS_CEFSIMPLE_SIMPLE_HANDLER_H_
 
 #include "include/cef_client.h"
+#include "include/cef_download_handler.h"
 
 #include <functional>
 #include <list>
@@ -41,7 +42,8 @@ public CefDisplayHandler,
 public CefLifeSpanHandler,
 public CefFocusHandler,
 public CefLoadHandler,
-public CefRenderHandler{
+public CefRenderHandler,
+public CefDownloadHandler{
 public:
     //Paint callback (software off-screen rendering)
     std::function<void(int browserId, const void* buffer, int32_t width, int32_t height)> onPaintCallback;
@@ -61,6 +63,9 @@ public:
     std::function<void(std::string, std::string, std::string, int browserId, std::string)> onJavaScriptChannelMessage;
     std::function<void(int browserId, std::string url)> onLoadStart;
     std::function<void(int browserId, std::string url)> onLoadEnd;
+    //download message
+    std::function<void(int browserId, uint32_t downloadId, std::string url, std::string suggestedName, std::string contentDisposition, std::string mimeType, int64_t totalBytes)> onBeforeDownloadEvent;
+    std::function<void(int browserId, uint32_t downloadId, std::string url, std::string fullPath, int64_t receivedBytes, int64_t totalBytes, int64_t currentSpeed, int percentComplete, bool isInProgress, bool isComplete, bool isCanceled, bool isInterrupted, int interruptReason)> onDownloadUpdatedEvent;
     
     explicit WebviewHandler();
     ~WebviewHandler();
@@ -77,6 +82,7 @@ public:
     }
     virtual CefRefPtr<CefLoadHandler> GetLoadHandler() override { return this; }
     virtual CefRefPtr<CefRenderHandler> GetRenderHandler() override { return this; }
+    virtual CefRefPtr<CefDownloadHandler> GetDownloadHandler() override { return this; }
 
 	bool OnProcessMessageReceived(
         CefRefPtr<CefBrowser> browser,
@@ -149,6 +155,21 @@ public:
                                int y) override;
     virtual void OnImeCompositionRangeChanged(CefRefPtr<CefBrowser> browser,const CefRange& selection_range,const CefRenderHandler::RectList& character_bounds) override;
 
+    // CefDownloadHandler methods:
+    virtual bool OnBeforeDownload(CefRefPtr<CefBrowser> browser,
+                                CefRefPtr<CefDownloadItem> download_item,
+                                const CefString& suggested_name,
+                                CefRefPtr<CefBeforeDownloadCallback> callback) override;
+    virtual void OnDownloadUpdated(CefRefPtr<CefBrowser> browser,
+                                 CefRefPtr<CefDownloadItem> download_item,
+                                 CefRefPtr<CefDownloadItemCallback> callback) override;
+
+    // Download action methods:
+    void continueDownload(uint32_t downloadId, const std::string& downloadPath, bool showDialog);
+    void cancelDownload(uint32_t downloadId);
+    void pauseDownload(uint32_t downloadId);
+    void resumeDownload(uint32_t downloadId);
+
     // Request that all existing browser windows close.
     void CloseAllBrowsers(bool force_close);
 
@@ -200,6 +221,10 @@ private:
     std::unordered_map<int, browser_info> browser_map_;
 
     std::unordered_map<std::string, std::function<void(CefRefPtr<CefValue>)>> js_callbacks_;
+
+    // Download callbacks maps keyed by downloadId
+    std::unordered_map<uint32_t, CefRefPtr<CefBeforeDownloadCallback>> download_before_callbacks_;
+    std::unordered_map<uint32_t, CefRefPtr<CefDownloadItemCallback>> download_item_callbacks_;
 
 #ifdef WEBVIEW_CEF_GPU_TEXTURE
     // GPU diagnostic state: whether any accelerated-paint frame has arrived, and
