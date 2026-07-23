@@ -51,6 +51,7 @@ class WebViewController extends ValueNotifier<bool> {
   final int _index;
   late int _browserId;
   late int _textureId;
+  int get textureId => _textureId;
   final Map<String, JavascriptChannel> _javascriptChannels =
       <String, JavascriptChannel>{};
   Map<String, JavascriptChannel> get javascriptChannels => _javascriptChannels;
@@ -618,5 +619,24 @@ class WebViewState extends State<WebView> with WebeViewTextInput {
       unawaited(
           _controller._setSize(dpi, Size(box.size.width, box.size.height)));
     }
+  }
+}
+
+class StaticWebView extends StatelessWidget {
+  final WebViewController controller;
+
+  const StaticWebView(this.controller, {super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<bool>(
+      valueListenable: controller,
+      builder: (context, initialized, child) {
+        if (!initialized) {
+          return controller.loadingWidget;
+        }
+        return Texture(textureId: controller.textureId);
+      },
+    );
   }
 }
