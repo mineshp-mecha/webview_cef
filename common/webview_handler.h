@@ -176,6 +176,9 @@ public:
     void closeBrowser(int browserId);
     void createBrowser(std::string url, bool isPrivate, std::function<void(int)> callback);
 
+    // Notify the browser that it has been hidden or shown.
+    void wasHidden(int browserId, bool hidden);
+
     // Drives one external BeginFrame for every live browser (GPU path only).
     // Marshals to the CEF UI thread; safe to call from any thread.
     void sendExternalBeginFrame();

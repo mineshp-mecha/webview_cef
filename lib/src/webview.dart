@@ -128,6 +128,13 @@ class WebViewController extends ValueNotifier<bool> {
     return _pluginChannel.invokeMethod('reload', _browserId);
   }
 
+  Future<void> wasHidden(bool hidden) async {
+    if (_isDisposed) {
+      return;
+    }
+    assert(value);
+    return _pluginChannel.invokeMethod('wasHidden', [_browserId, hidden]);
+  }
   Future<void> goForward() async {
     if (_isDisposed) {
       return;
