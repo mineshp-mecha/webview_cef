@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/physics.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 
 import 'webview_manager.dart';
@@ -136,6 +138,7 @@ class WebViewController extends ValueNotifier<bool> {
     assert(value);
     return _pluginChannel.invokeMethod('wasHidden', [_browserId, hidden]);
   }
+
   Future<void> goForward() async {
     if (_isDisposed) {
       return;
@@ -193,14 +196,8 @@ class WebViewController extends ValueNotifier<bool> {
       return;
     }
     assert(value);
-    return _pluginChannel.invokeMethod('sendKeyEvent', [
-      _browserId,
-      type,
-      keyCode,
-      modifiers,
-      character,
-      unmodifiedCharacter
-    ]);
+    return _pluginChannel.invokeMethod('sendKeyEvent',
+        [_browserId, type, keyCode, modifiers, character, unmodifiedCharacter]);
   }
 
   Future<void> setJavaScriptChannels(Set<JavascriptChannel> channels) async {
@@ -362,6 +359,29 @@ class WebViewState extends State<WebView> with WebeViewTextInput {
   MouseCursor _mouseType = SystemMouseCursors.basic;
   bool? _hasNativeKeySupport;
 
+  Offset? _lastTouchPosition;
+  Offset? _inertiaStartTouchPosition;
+  bool _isTouchMoving = false;
+  AnimationController? _inertiaController;
+  // The single active listener on _inertiaController. Only one flick's
+  // listener may be attached at a time -- without this, each new flick
+  // stacked another listener on the reused controller and old + new flicks
+  // fought over the same setScrollDelta stream (the direction-flip / jump
+  // bug seen in the logs).
+  VoidCallback? _inertiaListener;
+  final TickerProvider _tickerProvider = const _WebViewTickerProvider();
+
+  // Velocity tracking for touch-release inertia, captured straight off the
+  // raw pointer stream (no separate GestureDetector arena / delay).
+  final List<_TrackedPoint> _recentPoints = [];
+
+  // Per-frame scroll coalescing so we don't flood the platform channel with
+  // a setScrollDelta call on every single pointer move (important on
+  // high refresh-rate screens where pointer events can outpace frames).
+  Offset _pendingScrollDelta = Offset.zero;
+  Offset? _pendingScrollPosition;
+  Timer? _scrollFlushTimer;
+
   WebViewController get _controller => widget.controller;
 
   @override
@@ -403,6 +423,129 @@ class WebViewState extends State<WebView> with WebeViewTextInput {
         }
       }
     }
+  }
+
+  @override
+  void dispose() {
+    if (_inertiaListener != null) {
+      _inertiaController?.removeListener(_inertiaListener!);
+      _inertiaListener = null;
+    }
+    _inertiaController?.dispose();
+    _scrollFlushTimer?.cancel();
+    super.dispose();
+  }
+
+  void _stopInertia() {
+    final wasAnimating = _inertiaController?.isAnimating ?? false;
+    if (wasAnimating) {
+      _inertiaController?.stop();
+      _isTouchMoving = true; // Mark as moving to prevent click on next up
+    } else {
+      _isTouchMoving = false;
+    }
+
+    // Detach the previous flick's listener so it can't keep firing once a
+    // new touch/flick starts.
+    if (_inertiaListener != null) {
+      _inertiaController?.removeListener(_inertiaListener!);
+      _inertiaListener = null;
+    }
+
+    // Prevent leftover inertia deltas from bleeding into the next drag.
+    _scrollFlushTimer?.cancel();
+    _scrollFlushTimer = null;
+    _pendingScrollDelta = Offset.zero;
+    _pendingScrollPosition = null;
+  }
+
+  void _performInertia(Offset velocity) {
+    debugPrint("webview_cef: _performInertia velocity=$velocity");
+    _inertiaController ??=
+        AnimationController.unbounded(vsync: _tickerProvider);
+
+    // Remove any listener left over from a previous flick before adding a
+    // new one -- addListener is additive, so without this old flicks kept
+    // firing alongside new ones and their deltas got interleaved.
+    if (_inertiaListener != null) {
+      _inertiaController!.removeListener(_inertiaListener!);
+      _inertiaListener = null;
+    }
+
+    final double devicePixelRatio = MediaQuery.of(context).devicePixelRatio;
+    final Offset scaledVelocity = velocity / devicePixelRatio;
+    if (scaledVelocity.distance < 0.1) {
+      _isTouchMoving = false;
+      return;
+    }
+
+    final direction = scaledVelocity / scaledVelocity.distance;
+    final startTouchPosition =
+        _inertiaStartTouchPosition ?? _lastTouchPosition ?? Offset.zero;
+
+    // Cap the maximum velocity to prevent extreme jumps, but allow fast
+    // flicks to actually feel fast (was 3500).
+    const double maxVelocity = 2200.0;
+    final effectiveVelocity = scaledVelocity.distance.clamp(0.0, maxVelocity);
+
+    // Lower friction so momentum coasts smoothly instead of stopping almost
+    // immediately.
+    final simulation = FrictionSimulation(0.25, 0.0, effectiveVelocity);
+
+    double lastDistance = 0.0;
+
+    _inertiaListener = () {
+      if (!mounted ||
+          _inertiaController == null ||
+          !_inertiaController!.isAnimating) return;
+
+      final double currentDistance = _inertiaController!.value;
+      final double deltaDistance = currentDistance - lastDistance;
+      if (deltaDistance.abs() < 0.1) return;
+
+      final Offset delta = direction * deltaDistance;
+
+      // If startTouchPosition is zero, it might cause jumps to the top-left.
+      // We should use a reasonably safe position if it's missing.
+      Offset scrollPosition = startTouchPosition;
+      if (scrollPosition == Offset.zero) {
+        final box = context.findRenderObject() as RenderBox?;
+        if (box != null) {
+          scrollPosition = Offset(box.size.width / 2, box.size.height / 2);
+        }
+      }
+
+      _queueScroll(scrollPosition, Offset(-delta.dx, -delta.dy));
+      lastDistance = currentDistance;
+    };
+    _inertiaController!.addListener(_inertiaListener!);
+
+    _inertiaController!.animateWith(simulation).then((_) {
+      _isTouchMoving = false;
+    });
+  }
+
+  /// Batches scroll deltas and flushes at most once per frame, so fast
+  /// pointer/inertia updates don't flood the platform channel.
+  void _queueScroll(Offset position, Offset delta) {
+    debugPrint("webview_cef: _queueScroll position=$position, delta=$delta");
+    _pendingScrollPosition = position;
+    _pendingScrollDelta += delta;
+    if (_scrollFlushTimer != null) return;
+    _scrollFlushTimer = Timer(const Duration(milliseconds: 10), () {
+      _scrollFlushTimer = null;
+      final pos = _pendingScrollPosition;
+      if (pos == null) return;
+      var d = _pendingScrollDelta;
+      _pendingScrollDelta = Offset.zero;
+
+      // Clamp so a burst of queued deltas never lands as one big jump.
+      const double maxStep = 80.0;
+      if (d.distance > maxStep) {
+        d = d / d.distance * maxStep;
+      }
+      _controller._setScrollDelta(pos, d.dx.round(), d.dy.round());
+    });
   }
 
   @override
@@ -469,10 +612,10 @@ class WebViewState extends State<WebView> with WebeViewTextInput {
     // Map Flutter key event to CEF key event
     final logicalKey = event.logicalKey;
     final character = event.character;
-    
+
     // Convert logical key to Windows keycode
     int keyCode = _logicalKeyToWindowsKeyCode(logicalKey);
-    
+
     // Build modifiers
     int modifiers = 0;
     if (HardwareKeyboard.instance.isShiftPressed) {
@@ -484,7 +627,7 @@ class WebViewState extends State<WebView> with WebeViewTextInput {
     if (HardwareKeyboard.instance.isAltPressed) {
       modifiers |= eventFlagAltDown;
     }
-    
+
     // Determine event type
     int type;
     if (event is KeyDownEvent) {
@@ -494,7 +637,7 @@ class WebViewState extends State<WebView> with WebeViewTextInput {
     } else {
       return KeyEventResult.ignored;
     }
-    
+
     // Send key event to CEF
     _controller.sendKeyEvent(
       type,
@@ -503,7 +646,7 @@ class WebViewState extends State<WebView> with WebeViewTextInput {
       character?.codeUnitAt(0) ?? 0,
       character?.codeUnitAt(0) ?? 0,
     );
-    
+
     // Send CHAR event after RAWKEYDOWN when character is present (required for text entry)
     if (event is KeyDownEvent && character != null) {
       _controller.sendKeyEvent(
@@ -546,7 +689,7 @@ class WebViewState extends State<WebView> with WebeViewTextInput {
     if (key == LogicalKeyboardKey.arrowDown) return 0x28;
     if (key == LogicalKeyboardKey.arrowLeft) return 0x25;
     if (key == LogicalKeyboardKey.arrowRight) return 0x27;
-    
+
     // For alphanumeric keys, use the key label
     final keyLabel = key.keyLabel;
     if (keyLabel.length == 1) {
@@ -560,7 +703,7 @@ class WebViewState extends State<WebView> with WebeViewTextInput {
         return charCode;
       }
     }
-    
+
     // Default fallback
     return 0;
   }
@@ -604,6 +747,7 @@ class WebViewState extends State<WebView> with WebeViewTextInput {
             _tooltip?.cursorOffset = ev.position;
           },
           onPointerDown: (ev) {
+            _stopInertia();
             if (!_focusNode.hasFocus) {
               _controller._onImeCompositionRangeChangedMessage?.call(0, 0, 0);
               _focusNode.requestFocus();
@@ -613,23 +757,90 @@ class WebViewState extends State<WebView> with WebeViewTextInput {
                 }
               });
             }
-            _controller._cursorClickDown(ev.localPosition);
+
+            if (ev.kind == PointerDeviceKind.touch) {
+              _lastTouchPosition = ev.localPosition;
+              _inertiaStartTouchPosition = ev.localPosition;
+              _isTouchMoving = false;
+              // Start a fresh velocity sample window for this touch
+              // sequence, fed straight from the raw pointer stream (no
+              // separate GestureDetector arena, so no extra latency).
+              _recentPoints
+                ..clear()
+                ..add(_TrackedPoint(ev.timeStamp, ev.localPosition));
+            } else {
+              _controller._cursorClickDown(ev.localPosition);
+            }
           },
           onPointerUp: (ev) {
-            _controller._cursorClickUp(ev.localPosition);
+            if (ev.kind == PointerDeviceKind.touch) {
+              if (!_isTouchMoving) {
+                // If it was a short tap (no movement), we should still trigger a click
+                _controller._cursorClickDown(ev.localPosition);
+                _controller._cursorClickUp(ev.localPosition);
+              } else {
+                // Release: hand off to inertia using the velocity derived
+                // from just the last ~60ms of motion (more robust than a
+                // whole-gesture least-squares fit on fast/curved swipes).
+                if (_recentPoints.length >= 2) {
+                  final first = _recentPoints.first;
+                  final last = _recentPoints.last;
+                  final dt = (last.time - first.time).inMicroseconds / 1e6;
+                  if (dt > 0) {
+                    final v = (last.position - first.position) / dt; // px/sec
+                    if (v.distance > 0) {
+                      _performInertia(v * 0.4);
+                    }
+                  }
+                }
+              }
+              _lastTouchPosition = null;
+              _recentPoints.clear();
+            } else {
+              _controller._cursorClickUp(ev.localPosition);
+            }
+          },
+          onPointerCancel: (ev) {
+            _lastTouchPosition = null;
+            _recentPoints.clear();
+            _isTouchMoving = false;
           },
           onPointerMove: (ev) {
-            _controller._cursorDragging(ev.localPosition);
+            if (ev.kind == PointerDeviceKind.touch) {
+              debugPrint(
+                  "webview_cef: onPointerMove (touch) localPosition=${ev.localPosition}");
+              _recentPoints.add(_TrackedPoint(ev.timeStamp, ev.localPosition));
+              final cutoff = ev.timeStamp - const Duration(milliseconds: 60);
+              _recentPoints.removeWhere((p) => p.time < cutoff);
+              if (_lastTouchPosition != null) {
+                final delta = ev.localPosition - _lastTouchPosition!;
+                if (delta.distance > 12) {
+                  _isTouchMoving = true;
+                }
+                _queueScroll(ev.localPosition,
+                    Offset(-delta.dx * 0.25, -delta.dy * 0.35));
+                _lastTouchPosition = ev.localPosition;
+                _inertiaStartTouchPosition = ev.localPosition;
+              }
+            } else {
+              _controller._cursorDragging(ev.localPosition);
+            }
           },
           onPointerSignal: (signal) {
             if (signal is PointerScrollEvent) {
-              _controller._setScrollDelta(signal.localPosition,
-                  signal.scrollDelta.dx.round(), signal.scrollDelta.dy.round());
+              debugPrint(
+                  "webview_cef: onPointerSignal (scroll) localPosition=${signal.localPosition}, scrollDelta=${signal.scrollDelta}");
+              _queueScroll(
+                  signal.localPosition,
+                  Offset(signal.scrollDelta.dx * 0.25,
+                      signal.scrollDelta.dy * 0.25));
             }
           },
           onPointerPanZoomUpdate: (event) {
-            _controller._setScrollDelta(event.localPosition,
-                event.panDelta.dx.round(), event.panDelta.dy.round());
+            debugPrint(
+                "webview_cef: onPointerPanZoomUpdate panDelta=${event.panDelta}");
+            _queueScroll(event.localPosition,
+                Offset(event.panDelta.dx * 0.25, event.panDelta.dy * 0.25));
           },
           child: MouseRegion(
             cursor: _mouseType,
@@ -649,6 +860,19 @@ class WebViewState extends State<WebView> with WebeViewTextInput {
           _controller._setSize(dpi, Size(box.size.width, box.size.height)));
     }
   }
+}
+
+class _TrackedPoint {
+  final Duration time;
+  final Offset position;
+  _TrackedPoint(this.time, this.position);
+}
+
+class _WebViewTickerProvider implements TickerProvider {
+  const _WebViewTickerProvider();
+
+  @override
+  Ticker createTicker(TickerCallback onTick) => Ticker(onTick);
 }
 
 class StaticWebView extends StatelessWidget {
