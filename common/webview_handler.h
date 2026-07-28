@@ -189,6 +189,7 @@ public:
     void warnIfNoAcceleratedFrame();
 
     void sendScrollEvent(int browserId, int x, int y, int deltaX, int deltaY);
+    void sendTouchEvent(int browserId, const CefTouchEvent &ev);
     void changeSize(int browserId, float a_dpi, int width, int height);
     void cursorClick(int browserId, int x, int y, bool up);
     void cursorMove(int browserId, int x, int y, bool dragging);
@@ -198,6 +199,8 @@ public:
     void goBack(int browserId);
     void reload(int browserId);
     void openDevTools(int browserId);
+    bool canGoForward(int browserId);
+    bool canGoBack(int browserId);
 
     void imeSetComposition(int browserId, std::string text);
     void imeCommitText(int browserId, std::string text);

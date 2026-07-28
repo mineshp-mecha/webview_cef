@@ -424,10 +424,11 @@ void WebviewHandler::sendExternalBeginFrame() {
 #endif
 }
 
-void WebviewHandler::sendScrollEvent(int browserId, int x, int y, int deltaX, int deltaY) {
-
+void WebviewHandler::sendScrollEvent(int browserId, int x, int y, int deltaX, int deltaY)
+{
     auto it = browser_map_.find(browserId);
-    if (it != browser_map_.end()) {
+    if (it != browser_map_.end())
+    {
         CefMouseEvent ev;
         ev.x = x;
         ev.y = y;
@@ -435,13 +436,17 @@ void WebviewHandler::sendScrollEvent(int browserId, int x, int y, int deltaX, in
 #ifndef __APPLE__
         // The scrolling direction on Windows and Linux is different from MacOS
         deltaY = -deltaY;
-        // Flutter scrolls too slowly, it looks more normal by 10x default speed.
-        it->second.browser->GetHost()->SendMouseWheelEvent(ev, deltaX * 10, deltaY * 10);
-#else
-        it->second.browser->GetHost()->SendMouseWheelEvent(ev, deltaX, deltaY);
 #endif
+        it->second.browser->GetHost()->SendMouseWheelEvent(ev, deltaX, deltaY);
+    }
+}
 
-
+void WebviewHandler::sendTouchEvent(int browserId, const CefTouchEvent &ev)
+{
+    auto it = browser_map_.find(browserId);
+    if (it != browser_map_.end())
+    {
+        it->second.browser->GetHost()->SendTouchEvent(ev);
     }
 }
 
@@ -580,6 +585,25 @@ void WebviewHandler::wasHidden(int browserId, bool hidden)
         return;
     }
     it->second.browser->GetHost()->WasHidden(hidden);
+}
+bool WebviewHandler::canGoForward(int browserId)
+{
+    auto it = browser_map_.find(browserId);
+    if (it != browser_map_.end() && it->second.browser.get())
+    {
+        return it->second.browser->CanGoForward();
+    }
+    return false;
+}
+
+bool WebviewHandler::canGoBack(int browserId)
+{
+    auto it = browser_map_.find(browserId);
+    if (it != browser_map_.end() && it->second.browser.get())
+    {
+        return it->second.browser->CanGoBack();
+    }
+    return false;
 }
 
 void WebviewHandler::openDevTools(int browserId) {

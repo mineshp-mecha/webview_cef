@@ -1,12 +1,13 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-import 'webview_manager.dart';
 import 'webview_events_listener.dart';
 import 'webview_javascript.dart';
+import 'webview_manager.dart';
 import 'webview_textinput.dart';
 import 'webview_tooltip.dart';
 
@@ -136,6 +137,7 @@ class WebViewController extends ValueNotifier<bool> {
     assert(value);
     return _pluginChannel.invokeMethod('wasHidden', [_browserId, hidden]);
   }
+
   Future<void> goForward() async {
     if (_isDisposed) {
       return;
@@ -150,6 +152,26 @@ class WebViewController extends ValueNotifier<bool> {
     }
     assert(value);
     return _pluginChannel.invokeMethod('goBack', _browserId);
+  }
+
+  Future<bool> canGoForward() async {
+    if (_isDisposed) {
+      return false;
+    }
+    assert(value);
+    final bool? canGo =
+        await _pluginChannel.invokeMethod<bool>('canGoForward', _browserId);
+    return canGo ?? false;
+  }
+
+  Future<bool> canGoBack() async {
+    if (_isDisposed) {
+      return false;
+    }
+    assert(value);
+    final bool? canGo =
+        await _pluginChannel.invokeMethod<bool>('canGoBack', _browserId);
+    return canGo ?? false;
   }
 
   Future<void> openDevTools() async {
@@ -193,14 +215,8 @@ class WebViewController extends ValueNotifier<bool> {
       return;
     }
     assert(value);
-    return _pluginChannel.invokeMethod('sendKeyEvent', [
-      _browserId,
-      type,
-      keyCode,
-      modifiers,
-      character,
-      unmodifiedCharacter
-    ]);
+    return _pluginChannel.invokeMethod('sendKeyEvent',
+        [_browserId, type, keyCode, modifiers, character, unmodifiedCharacter]);
   }
 
   Future<void> setJavaScriptChannels(Set<JavascriptChannel> channels) async {
@@ -314,6 +330,17 @@ class WebViewController extends ValueNotifier<bool> {
         [_browserId, position.dx.round(), position.dy.round(), dx, dy]);
   }
 
+  /// Sends a native touch event to CEF.
+  Future<void> _sendTouchEvent(
+      int touchId, int type, Offset position, int modifiers) async {
+    if (_isDisposed) {
+      return;
+    }
+    assert(value);
+    return _pluginChannel.invokeMethod('sendTouchEvent',
+        [_browserId, type, touchId, position.dx, position.dy, modifiers]);
+  }
+
   /// Sets the surface size to the provided [size].
   Future<void> _setSize(double dpi, Size size) async {
     if (_isDisposed) {
@@ -344,8 +371,14 @@ class WebViewController extends ValueNotifier<bool> {
   Function(int, int, int)? _onImeCompositionRangeChangedMessage;
 }
 
+enum _TouchGestureType { undecided, horizontal, vertical }
+
 class WebView extends StatefulWidget {
   final WebViewController controller;
+
+  static double get mouseScrollSensitivity => Platform.isMacOS ? 1.0 : 10.0;
+  static const double trackpadScrollSensitivity = 1.0;
+  static const double touchScrollSensitivity = 1.0;
 
   const WebView(this.controller, {super.key});
 
@@ -361,6 +394,10 @@ class WebViewState extends State<WebView> with WebeViewTextInput {
   WebviewTooltip? _tooltip;
   MouseCursor _mouseType = SystemMouseCursors.basic;
   bool? _hasNativeKeySupport;
+  _TouchGestureType _gestureType = _TouchGestureType.undecided;
+  Offset? _startPosition;
+  bool _touchCancelled = false;
+  int? _primaryPointerId;
 
   WebViewController get _controller => widget.controller;
 
@@ -469,10 +506,10 @@ class WebViewState extends State<WebView> with WebeViewTextInput {
     // Map Flutter key event to CEF key event
     final logicalKey = event.logicalKey;
     final character = event.character;
-    
+
     // Convert logical key to Windows keycode
     int keyCode = _logicalKeyToWindowsKeyCode(logicalKey);
-    
+
     // Build modifiers
     int modifiers = 0;
     if (HardwareKeyboard.instance.isShiftPressed) {
@@ -484,7 +521,7 @@ class WebViewState extends State<WebView> with WebeViewTextInput {
     if (HardwareKeyboard.instance.isAltPressed) {
       modifiers |= eventFlagAltDown;
     }
-    
+
     // Determine event type
     int type;
     if (event is KeyDownEvent) {
@@ -494,7 +531,7 @@ class WebViewState extends State<WebView> with WebeViewTextInput {
     } else {
       return KeyEventResult.ignored;
     }
-    
+
     // Send key event to CEF
     _controller.sendKeyEvent(
       type,
@@ -503,7 +540,7 @@ class WebViewState extends State<WebView> with WebeViewTextInput {
       character?.codeUnitAt(0) ?? 0,
       character?.codeUnitAt(0) ?? 0,
     );
-    
+
     // Send CHAR event after RAWKEYDOWN when character is present (required for text entry)
     if (event is KeyDownEvent && character != null) {
       _controller.sendKeyEvent(
@@ -546,7 +583,7 @@ class WebViewState extends State<WebView> with WebeViewTextInput {
     if (key == LogicalKeyboardKey.arrowDown) return 0x28;
     if (key == LogicalKeyboardKey.arrowLeft) return 0x25;
     if (key == LogicalKeyboardKey.arrowRight) return 0x27;
-    
+
     // For alphanumeric keys, use the key label
     final keyLabel = key.keyLabel;
     if (keyLabel.length == 1) {
@@ -560,7 +597,7 @@ class WebViewState extends State<WebView> with WebeViewTextInput {
         return charCode;
       }
     }
-    
+
     // Default fallback
     return 0;
   }
@@ -613,23 +650,93 @@ class WebViewState extends State<WebView> with WebeViewTextInput {
                 }
               });
             }
-            _controller._cursorClickDown(ev.localPosition);
+            if (ev.kind == PointerDeviceKind.touch) {
+              if (_primaryPointerId == null) {
+                _primaryPointerId = ev.pointer;
+                _startPosition = ev.localPosition;
+                _gestureType = _TouchGestureType.undecided;
+                _touchCancelled = false;
+              }
+              _sendTouchEvent(ev, 1); // pressed (CEF_TET_PRESSED = 1)
+            } else {
+              _controller._cursorClickDown(ev.localPosition);
+            }
           },
           onPointerUp: (ev) {
-            _controller._cursorClickUp(ev.localPosition);
+            if (ev.kind == PointerDeviceKind.touch) {
+              if (!_touchCancelled) {
+                _sendTouchEvent(ev, 0); // released (CEF_TET_RELEASED = 0)
+              }
+              if (ev.pointer == _primaryPointerId) {
+                _primaryPointerId = null;
+                _startPosition = null;
+                _touchCancelled = false;
+              }
+            } else {
+              _controller._cursorClickUp(ev.localPosition);
+            }
           },
           onPointerMove: (ev) {
-            _controller._cursorDragging(ev.localPosition);
+            if (ev.kind == PointerDeviceKind.touch) {
+              if (ev.pointer == _primaryPointerId &&
+                  _gestureType == _TouchGestureType.undecided &&
+                  _startPosition != null) {
+                final dx = ev.localPosition.dx - _startPosition!.dx;
+                final dy = ev.localPosition.dy - _startPosition!.dy;
+                if (dx.abs() > 10 || dy.abs() > 10) {
+                  if (dx.abs() > dy.abs()) {
+                    _gestureType = _TouchGestureType.horizontal;
+                    _sendTouchEvent(ev, 3); // cancelled (CEF_TET_CANCELLED = 3)
+                    _touchCancelled = true;
+                  } else {
+                    _gestureType = _TouchGestureType.vertical;
+                  }
+                }
+              }
+
+              if (!_touchCancelled) {
+                _sendTouchEvent(ev, 2); // moved (CEF_TET_MOVED = 2)
+              }
+            } else {
+              _controller._cursorDragging(ev.localPosition);
+            }
+          },
+          onPointerCancel: (ev) {
+            if (ev.kind == PointerDeviceKind.touch) {
+              if (!_touchCancelled) {
+                _sendTouchEvent(ev, 3); // cancelled (CEF_TET_CANCELLED = 3)
+              }
+              if (ev.pointer == _primaryPointerId) {
+                _primaryPointerId = null;
+                _startPosition = null;
+                _touchCancelled = false;
+              }
+            }
           },
           onPointerSignal: (signal) {
             if (signal is PointerScrollEvent) {
-              _controller._setScrollDelta(signal.localPosition,
-                  signal.scrollDelta.dx.round(), signal.scrollDelta.dy.round());
+              double multiplier = 1.0;
+              if (signal.kind == PointerDeviceKind.mouse) {
+                multiplier = WebView.mouseScrollSensitivity;
+              } else if (signal.kind == PointerDeviceKind.trackpad) {
+                multiplier = WebView.trackpadScrollSensitivity;
+              } else if (signal.kind == PointerDeviceKind.touch) {
+                multiplier = WebView.touchScrollSensitivity;
+              }
+              _controller._setScrollDelta(
+                signal.localPosition,
+                (signal.scrollDelta.dx * multiplier).round(),
+                (signal.scrollDelta.dy * multiplier).round(),
+              );
             }
           },
           onPointerPanZoomUpdate: (event) {
-            _controller._setScrollDelta(event.localPosition,
-                event.panDelta.dx.round(), event.panDelta.dy.round());
+            double multiplier = WebView.trackpadScrollSensitivity;
+            _controller._setScrollDelta(
+              event.localPosition,
+              (event.panDelta.dx * multiplier).round(),
+              (event.panDelta.dy * multiplier).round(),
+            );
           },
           child: MouseRegion(
             cursor: _mouseType,
@@ -637,6 +744,26 @@ class WebViewState extends State<WebView> with WebeViewTextInput {
           ),
         ),
       ),
+    );
+  }
+
+  Future<void> _sendTouchEvent(PointerEvent ev, int type) {
+    int modifiers = 0;
+    if (HardwareKeyboard.instance.isShiftPressed) {
+      modifiers |= eventFlagShiftDown;
+    }
+    if (HardwareKeyboard.instance.isControlPressed) {
+      modifiers |= eventFlagControlDown;
+    }
+    if (HardwareKeyboard.instance.isAltPressed) {
+      modifiers |= eventFlagAltDown;
+    }
+
+    return _controller._sendTouchEvent(
+      ev.pointer,
+      type,
+      ev.localPosition,
+      modifiers,
     );
   }
 
