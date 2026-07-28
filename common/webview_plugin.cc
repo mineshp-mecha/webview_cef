@@ -421,6 +421,30 @@ namespace webview_cef {
 			m_handler->sendScrollEvent(browserId, (int)x, (int)y, (int)deltaX, (int)deltaY);
 			result(1, nullptr);
 		}
+		else if (name.compare("sendTouchEvent") == 0)
+		{
+			int browserId = int(webview_value_get_int(webview_value_get_list_value(values, 0)));
+			int type = int(webview_value_get_int(webview_value_get_list_value(values, 1)));
+			int touchId = int(webview_value_get_int(webview_value_get_list_value(values, 2)));
+			double x = webview_value_get_double(webview_value_get_list_value(values, 3));
+			double y = webview_value_get_double(webview_value_get_list_value(values, 4));
+			int modifiers = int(webview_value_get_int(webview_value_get_list_value(values, 5)));
+
+			CefTouchEvent touchEvent;
+			touchEvent.id = touchId;
+			touchEvent.x = (float)x;
+			touchEvent.y = (float)y;
+			touchEvent.radius_x = 0.0f;
+			touchEvent.radius_y = 0.0f;
+			touchEvent.rotation_angle = 0.0f;
+			touchEvent.pressure = 1.0f;
+			touchEvent.type = static_cast<cef_touch_event_type_t>(type);
+			touchEvent.modifiers = modifiers;
+			touchEvent.pointer_type = CEF_POINTER_TYPE_TOUCH;
+
+			m_handler->sendTouchEvent(browserId, touchEvent);
+			result(1, nullptr);
+		}
 		else if (name.compare("goForward") == 0) {
 			int browserId = int(webview_value_get_int(values));
 			m_handler->goForward(browserId);

@@ -189,6 +189,7 @@ public:
     void warnIfNoAcceleratedFrame();
 
     void sendScrollEvent(int browserId, int x, int y, int deltaX, int deltaY);
+    void sendTouchEvent(int browserId, const CefTouchEvent &ev);
     void changeSize(int browserId, float a_dpi, int width, int height);
     void cursorClick(int browserId, int x, int y, bool up);
     void cursorMove(int browserId, int x, int y, bool dragging);
