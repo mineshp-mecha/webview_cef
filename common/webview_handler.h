@@ -199,6 +199,8 @@ public:
     void goBack(int browserId);
     void reload(int browserId);
     void openDevTools(int browserId);
+    bool canGoForward(int browserId);
+    bool canGoBack(int browserId);
 
     void imeSetComposition(int browserId, std::string text);
     void imeCommitText(int browserId, std::string text);

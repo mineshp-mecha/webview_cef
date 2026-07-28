@@ -586,6 +586,25 @@ void WebviewHandler::wasHidden(int browserId, bool hidden)
     }
     it->second.browser->GetHost()->WasHidden(hidden);
 }
+bool WebviewHandler::canGoForward(int browserId)
+{
+    auto it = browser_map_.find(browserId);
+    if (it != browser_map_.end() && it->second.browser.get())
+    {
+        return it->second.browser->CanGoForward();
+    }
+    return false;
+}
+
+bool WebviewHandler::canGoBack(int browserId)
+{
+    auto it = browser_map_.find(browserId);
+    if (it != browser_map_.end() && it->second.browser.get())
+    {
+        return it->second.browser->CanGoBack();
+    }
+    return false;
+}
 
 void WebviewHandler::openDevTools(int browserId) {
     auto it = browser_map_.find(browserId);

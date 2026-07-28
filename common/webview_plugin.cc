@@ -685,6 +685,23 @@ namespace webview_cef {
 			m_handler->cancelDownload(downloadId);
 			result(1, nullptr);
 		}
+		else if (name.compare("canGoForward") == 0)
+		{
+			int browserId = int(webview_value_get_int(values));
+			bool canGo = m_handler->canGoForward(browserId);
+			WValue *ret = webview_value_new_bool(canGo);
+			result(1, ret);
+			webview_value_unref(ret);
+		}
+		else if (name.compare("canGoBack") == 0)
+		{
+			int browserId = int(webview_value_get_int(values));
+			bool canGo = m_handler->canGoBack(browserId);
+			WValue *ret = webview_value_new_bool(canGo);
+			result(1, ret);
+			webview_value_unref(ret);
+		}
+
 		else if (name.compare("pauseDownload") == 0) {
 			uint32_t downloadId = uint32_t(webview_value_get_int(values));
 			m_handler->pauseDownload(downloadId);
