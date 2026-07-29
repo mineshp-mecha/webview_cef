@@ -867,6 +867,63 @@ void WebviewHandler::executeJavaScript(int browserId, const std::string code, st
     }
 }
 
+std::string WebviewHandler::captureScreenshot(int browserId, const std::string& outputPath)
+{
+    auto it = browser_map_.find(browserId);
+    if (it == browser_map_.end() || !it->second.browser.get()) {
+        return "";
+    }
+
+    if (it->second.last_paint_buffer.empty()) {
+        return "";
+    }
+
+    // Write buffer as PNG file
+    FILE* fp = fopen(outputPath.c_str(), "wb");
+    if (!fp) {
+        return "";
+    }
+
+    // Simple BMP header + raw RGBA data (for simplicity, can be upgraded to PNG)
+    // BMP file header (14 bytes)
+    unsigned char header[54] = {0};
+    header[0] = 'B';
+    header[1] = 'M';
+    int width = it->second.width;
+    int height = it->second.height;
+    int padding = (4 - (width * 3) % 4) % 4;
+    int dataSize = (width * 3 + padding) * height;
+    int fileSize = 54 + dataSize;
+
+    *(int*)&header[2] = fileSize;
+    *(int*)&header[10] = 54;
+    *(int*)&header[14] = 40;
+    *(int*)&header[18] = width;
+    *(int*)&header[22] = height;
+    *(short*)&header[26] = 1;
+    *(short*)&header[28] = 24; // 24 bits per pixel
+
+    fwrite(header, 1, 54, fp);
+
+    // Write pixel data (convert RGBA to BGR, flip vertically)
+    const unsigned char* src = it->second.last_paint_buffer.data();
+    std::vector<unsigned char> row(width * 3 + padding, 0);
+
+    for (int y = height - 1; y >= 0; y--) {
+        for (int x = 0; x < width; x++) {
+            int srcIdx = (y * width + x) * 4;
+            int dstIdx = x * 3;
+            row[dstIdx + 0] = src[srcIdx + 2]; // B
+            row[dstIdx + 1] = src[srcIdx + 1]; // G
+            row[dstIdx + 2] = src[srcIdx + 0]; // R
+        }
+        fwrite(row.data(), 1, width * 3 + padding, fp);
+    }
+
+    fclose(fp);
+    return outputPath;
+}
+
 void WebviewHandler::GetViewRect(CefRefPtr<CefBrowser> browser, CefRect &rect) {
     CEF_REQUIRE_UI_THREAD();
     auto it = browser_map_.find(browser->GetIdentifier());
@@ -896,8 +953,20 @@ bool WebviewHandler::GetScreenInfo(CefRefPtr<CefBrowser> browser, CefScreenInfo&
 
 void WebviewHandler::OnPaint(CefRefPtr<CefBrowser> browser, CefRenderHandler::PaintElementType type,
                             const CefRenderHandler::RectList &dirtyRects, const void *buffer, int w, int h) {
-    if (!browser->IsPopup() && onPaintCallback != nullptr) {
-        onPaintCallback(browser->GetIdentifier(), buffer, w, h);
+    if (!browser->IsPopup()) {
+        // Store buffer for screenshot capture
+        auto it = browser_map_.find(browser->GetIdentifier());
+        if (it != browser_map_.end()) {
+            const size_t buffer_size = w * h * 4; // RGBA
+            it->second.last_paint_buffer.resize(buffer_size);
+            std::memcpy(it->second.last_paint_buffer.data(), buffer, buffer_size);
+            it->second.width = w;
+            it->second.height = h;
+        }
+        
+        if (onPaintCallback != nullptr) {
+            onPaintCallback(browser->GetIdentifier(), buffer, w, h);
+        }
     }
 }
 
