@@ -25,6 +25,8 @@ endif()
 set(CEF_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../third/cef")
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CEF_ROOT}/cmake")
 find_package(CEF REQUIRED)
+find_package(PNG REQUIRED)
+find_package(ZLIB REQUIRED)
 
 set(PLUGIN_NAME "webview_cef_plugin")
 
@@ -58,6 +60,8 @@ target_link_libraries(${PLUGIN_NAME} PRIVATE
       flutter_wrapper_plugin
       libcef_dll_wrapper
       ${CEF_LIB_DEPS}
+      PNG::PNG
+      ZLIB::ZLIB
 )
 # The flutter target here refers to the library provided by the elinux toolchain
 # which is automatically configured in the example/elinux build.

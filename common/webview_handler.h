@@ -11,6 +11,8 @@
 #include <functional>
 #include <list>
 #include <unordered_map>
+#include <mutex>
+#include <thread>
 
 #include "webview_cookieVisitor.h"
 
@@ -37,6 +39,8 @@ struct browser_info{
     bool focus_reasserted = false;
     // Store last painted buffer for screenshot capture
     std::vector<unsigned char> last_paint_buffer;
+    bool capture_requested = false;
+    std::string pending_output_path;
 };
 
 class WebviewHandler : public CefClient,
