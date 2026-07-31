@@ -13,6 +13,13 @@ typedef UrlChangeCb = void Function(String url);
  */
 typedef LoadStartCb = void Function(WebViewController controller, String url);
 typedef LoadStopCb = void Function(WebViewController controller, String url);
+typedef OnLoadErrorCb = void Function(
+  WebViewController controller,
+  int errorCode,
+  String errorText,
+  String failedUrl,
+  bool isMainFrame,
+);
 
 typedef OnConsoleMessage = void Function(
     int level, String message, String source, int line);
@@ -49,6 +56,7 @@ class WebviewEventsListener {
   OnConsoleMessage? onConsoleMessage;
   LoadStartCb? onLoadStart;
   LoadStopCb? onLoadEnd;
+  OnLoadErrorCb? onLoadError;
   OnBeforeDownloadCb? onBeforeDownload;
   OnDownloadUpdatedCb? onDownloadUpdated;
 
@@ -58,6 +66,7 @@ class WebviewEventsListener {
     this.onConsoleMessage,
     this.onLoadStart,
     this.onLoadEnd,
+    this.onLoadError,
     this.onBeforeDownload,
     this.onDownloadUpdated,
   });

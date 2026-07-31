@@ -40,12 +40,13 @@ namespace {
 // The only browser that currently get focused
 CefRefPtr<CefBrowser> current_focused_browser_ = nullptr;
 
+// Commented out because it is currently unused.
 // Returns a data: URI with the specified contents.
-std::string GetDataURI(const std::string& data, const std::string& mime_type) {
-    return "data:" + mime_type + ";base64," +
-    CefURIEncode(CefBase64Encode(data.data(), data.size()), false)
-        .ToString();
-}
+// std::string GetDataURI(const std::string& data, const std::string& mime_type) {
+//     return "data:" + mime_type + ";base64," +
+//     CefURIEncode(CefBase64Encode(data.data(), data.size()), false)
+//         .ToString();
+// }
 
 }  // namespace
 
@@ -206,15 +207,16 @@ void WebviewHandler::OnLoadError(CefRefPtr<CefBrowser> browser,
     // Don't display an error for downloaded files.
     if (errorCode == ERR_ABORTED)
         return;
-    
-    // Display a load error message using a data: URI.
-    std::stringstream ss;
-    ss << "<html><body bgcolor=\"white\">"
-    "<h2>Failed to load URL "
-    << std::string(failedUrl) << " with error " << std::string(errorText)
-    << " (" << errorCode << ").</h2></body></html>";
-    
-    frame->LoadURL(GetDataURI(ss.str(), "text/html"));
+
+    if (onLoadErrorEvent) {
+        onLoadErrorEvent(
+            browser->GetIdentifier(),
+            errorCode,
+            errorText.ToString(),
+            failedUrl.ToString(),
+            frame->IsMain()
+        );
+    }
 }
 
 void WebviewHandler::OnLoadStart(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame,
