@@ -11,6 +11,8 @@
 #include <functional>
 #include <list>
 #include <unordered_map>
+#include <mutex>
+#include <thread>
 
 #include "webview_cookieVisitor.h"
 
@@ -35,6 +37,10 @@ struct browser_info{
     // right after creation is lost; we re-apply it once the first frame lands.
     bool wants_focus = false;
     bool focus_reasserted = false;
+    // Store last painted buffer for screenshot capture
+    std::vector<unsigned char> last_paint_buffer;
+    bool capture_requested = false;
+    std::string pending_output_path;
 };
 
 class WebviewHandler : public CefClient,
@@ -221,6 +227,7 @@ public:
     void setJavaScriptChannels(int browserId, const std::vector<std::string> channels);
     void sendJavaScriptChannelCallBack(const bool error, const std::string result, const std::string callbackId, const int browserId, const std::string frameId);
     void executeJavaScript(int browserId, const std::string code, std::function<void(CefRefPtr<CefValue>)> callback = nullptr);
+    std::string captureScreenshot(int browserId, const std::string& outputPath);
     
 private:
     // List of existing browser windows. Only accessed on the CEF UI thread.

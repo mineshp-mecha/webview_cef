@@ -138,6 +138,17 @@ class WebViewController extends ValueNotifier<bool> {
     return _pluginChannel.invokeMethod('wasHidden', [_browserId, hidden]);
   }
 
+  /// Captures a screenshot of the current webview content and returns the file path.
+  Future<String?> captureScreenshot(String outputPath) async {
+    if (_isDisposed) {
+      return null;
+    }
+    assert(value);
+    final String? result = await _pluginChannel.invokeMethod<String>(
+        'captureScreenshot', [_browserId, outputPath]);
+    return result;
+  }
+
   Future<void> goForward() async {
     if (_isDisposed) {
       return;

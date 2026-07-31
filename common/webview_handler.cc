@@ -10,6 +10,8 @@
 #include <chrono>
 #include <unordered_map>
 #include <cstdint>
+#include <png.h>
+#include <zlib.h>
 
 #include "include/base/cef_callback.h"
 #include "include/cef_app.h"
@@ -867,6 +869,22 @@ void WebviewHandler::executeJavaScript(int browserId, const std::string code, st
     }
 }
 
+std::string WebviewHandler::captureScreenshot(int browserId, const std::string& outputPath)
+{
+    auto it = browser_map_.find(browserId);
+    if (it == browser_map_.end() || !it->second.browser.get()) {
+        return "";
+    }
+
+    it->second.capture_requested = true;
+    it->second.pending_output_path = outputPath;
+    
+    // Request a frame to be painted if not already painting
+    it->second.browser->GetHost()->Invalidate(PET_VIEW);
+
+    return outputPath;
+}
+
 void WebviewHandler::GetViewRect(CefRefPtr<CefBrowser> browser, CefRect &rect) {
     CEF_REQUIRE_UI_THREAD();
     auto it = browser_map_.find(browser->GetIdentifier());
@@ -895,9 +913,104 @@ bool WebviewHandler::GetScreenInfo(CefRefPtr<CefBrowser> browser, CefScreenInfo&
 }
 
 void WebviewHandler::OnPaint(CefRefPtr<CefBrowser> browser, CefRenderHandler::PaintElementType type,
-                            const CefRenderHandler::RectList &dirtyRects, const void *buffer, int w, int h) {
-    if (!browser->IsPopup() && onPaintCallback != nullptr) {
-        onPaintCallback(browser->GetIdentifier(), buffer, w, h);
+                             const CefRenderHandler::RectList &dirtyRects, const void *buffer, int w, int h)
+{
+    if (!browser->IsPopup())
+    {
+        auto it = browser_map_.find(browser->GetIdentifier());
+        if (it != browser_map_.end())
+        {
+            if (it->second.capture_requested)
+            {
+                it->second.capture_requested = false;
+                std::string outputPath = it->second.pending_output_path;
+
+                // --- Resize + BGRA->RGB pack happens HERE, on the UI/paint thread,
+                // directly from the live `buffer` — no full-frame copy first.
+                int target_h = h;
+                int target_w = w;
+                int scale = 1;
+                if (h > 480)
+                {
+                    scale = (h + 479) / 480;
+                    target_h = h / scale;
+                    target_w = w / scale;
+                }
+
+                auto small = std::make_shared<std::vector<unsigned char>>(
+                    (size_t)target_w * target_h * 3);
+
+                const unsigned char *src = static_cast<const unsigned char *>(buffer);
+                unsigned char *dst = small->data();
+
+                for (int y = 0; y < target_h; y++)
+                {
+                    int src_y = y * scale;
+                    for (int x = 0; x < target_w; x++)
+                    {
+                        int src_x = x * scale;
+                        int srcIdx = (src_y * w + src_x) * 4; // BGRA
+                        int dstIdx = (y * target_w + x) * 3;
+                        dst[dstIdx + 0] = src[srcIdx + 2]; // R
+                        dst[dstIdx + 1] = src[srcIdx + 1]; // G
+                        dst[dstIdx + 2] = src[srcIdx + 0]; // B
+                    }
+                }
+
+                // Background thread now only writes the small buffer to disk —
+                // no resize math, no access to the original CEF buffer at all.
+                std::thread([small, outputPath, target_w, target_h]()
+                            {
+                    std::string tmpPath = outputPath + ".tmp";
+                    FILE* fp = fopen(tmpPath.c_str(), "wb");
+                    if (!fp) return;
+
+                    png_structp png_ptr = png_create_write_struct(PNG_LIBPNG_VER_STRING, NULL, NULL, NULL);
+                    if (!png_ptr) { fclose(fp); return; }
+
+                    png_infop info_ptr = png_create_info_struct(png_ptr);
+                    if (!info_ptr) { png_destroy_write_struct(&png_ptr, NULL); fclose(fp); return; }
+
+                    if (setjmp(png_jmpbuf(png_ptr))) {
+                        png_destroy_write_struct(&png_ptr, &info_ptr);
+                        fclose(fp);
+                        remove(tmpPath.c_str());
+                        return;
+                    }
+
+                    png_init_io(png_ptr, fp);
+                    png_set_IHDR(png_ptr, info_ptr, target_w, target_h,
+                                 8, PNG_COLOR_TYPE_RGB, PNG_INTERLACE_NONE,
+                                 PNG_COMPRESSION_TYPE_BASE, PNG_FILTER_TYPE_BASE);
+
+                    // Tuned for flat-color UI content — smaller & often faster than defaults
+                    png_set_compression_level(png_ptr, 6);
+                    png_set_compression_strategy(png_ptr, Z_RLE);
+                    png_set_filter(png_ptr, 0, PNG_FILTER_SUB);
+
+                    png_write_info(png_ptr, info_ptr);
+
+                    const unsigned char* px = small->data();
+                    for (int y = 0; y < target_h; y++) {
+                        png_write_row(png_ptr, const_cast<png_bytep>(px + (size_t)y * target_w * 3));
+                    }
+
+                    png_write_end(png_ptr, NULL);
+                    png_destroy_write_struct(&png_ptr, &info_ptr);
+                    fclose(fp);
+
+                    // Atomic-ish swap so a crash/power-loss never leaves a corrupt file
+                    // at outputPath — worst case you lose the .tmp, not the previous good file.
+                    rename(tmpPath.c_str(), outputPath.c_str()); })
+                    .detach();
+            }
+            it->second.width = w;
+            it->second.height = h;
+        }
+        
+        if (onPaintCallback != nullptr) {
+            onPaintCallback(browser->GetIdentifier(), buffer, w, h);
+        }
     }
 }
 

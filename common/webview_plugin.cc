@@ -712,6 +712,14 @@ namespace webview_cef {
 			m_handler->resumeDownload(downloadId);
 			result(1, nullptr);
 		}
+		else if (name.compare("captureScreenshot") == 0) {
+			int browserId = int(webview_value_get_int(webview_value_get_list_value(values, 0)));
+			const auto outputPath = webview_value_get_string(webview_value_get_list_value(values, 1));
+			std::string screenshotPath = m_handler->captureScreenshot(browserId, outputPath ? outputPath : "");
+			WValue* ret = webview_value_new_string(screenshotPath.c_str());
+			result(1, ret);
+			webview_value_unref(ret);
+		}
 		else {
 			result = 0;
 		}
