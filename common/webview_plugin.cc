@@ -245,6 +245,31 @@ namespace webview_cef {
                 }
             };
 
+            m_handler->onLoadErrorEvent = [=](int nBrowserId, int errorCode, std::string errorText, std::string failedUrl, bool isMainFrame)
+            {
+                if (m_invokeFunc)
+                {
+                    WValue* bId = webview_value_new_int(nBrowserId);
+                    WValue* errCode = webview_value_new_int(errorCode);
+                    WValue* errText = webview_value_new_string(const_cast<char*>(errorText.c_str()));
+                    WValue* fUrl = webview_value_new_string(const_cast<char*>(failedUrl.c_str()));
+                    WValue* mainFrame = webview_value_new_bool(isMainFrame);
+                    WValue* retMap = webview_value_new_map();
+                    webview_value_set_string(retMap, "browserId", bId);
+                    webview_value_set_string(retMap, "errorCode", errCode);
+                    webview_value_set_string(retMap, "errorText", errText);
+                    webview_value_set_string(retMap, "failedUrl", fUrl);
+                    webview_value_set_string(retMap, "isMainFrame", mainFrame);
+                    m_invokeFunc("onLoadError", retMap);
+                    webview_value_unref(bId);
+                    webview_value_unref(errCode);
+                    webview_value_unref(errText);
+                    webview_value_unref(fUrl);
+                    webview_value_unref(mainFrame);
+                    webview_value_unref(retMap);
+                }
+            };
+
             m_handler->onBeforeDownloadEvent = [=](int nBrowserId, uint32_t downloadId, std::string url, std::string suggestedName, std::string contentDisposition, std::string mimeType, int64_t totalBytes)
             {
                 if (m_invokeFunc)
@@ -343,6 +368,9 @@ namespace webview_cef {
 		m_handler->onJavaScriptChannelMessage = nullptr;
 		m_handler->onFocusedNodeChangeMessage = nullptr;
 		m_handler->onImeCompositionRangeChangedMessage = nullptr;
+		m_handler->onLoadStart = nullptr;
+		m_handler->onLoadEnd = nullptr;
+		m_handler->onLoadErrorEvent = nullptr;
 		m_handler->onBeforeDownloadEvent = nullptr;
 		m_handler->onDownloadUpdatedEvent = nullptr;
 		m_init = false;

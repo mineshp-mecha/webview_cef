@@ -69,6 +69,7 @@ public:
     std::function<void(std::string, std::string, std::string, int browserId, std::string)> onJavaScriptChannelMessage;
     std::function<void(int browserId, std::string url)> onLoadStart;
     std::function<void(int browserId, std::string url)> onLoadEnd;
+    std::function<void(int browserId, int errorCode, std::string errorText, std::string failedUrl, bool isMainFrame)> onLoadErrorEvent;
     //download message
     std::function<void(int browserId, uint32_t downloadId, std::string url, std::string suggestedName, std::string contentDisposition, std::string mimeType, int64_t totalBytes)> onBeforeDownloadEvent;
     std::function<void(int browserId, uint32_t downloadId, std::string url, std::string fullPath, int64_t receivedBytes, int64_t totalBytes, int64_t currentSpeed, int percentComplete, bool isInProgress, bool isComplete, bool isCanceled, bool isInterrupted, int interruptReason)> onDownloadUpdatedEvent;
