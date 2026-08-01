@@ -114,7 +114,7 @@ void WebviewApp::OnBeforeCommandLineProcessing(const CefString &process_type, Ce
 #endif
 
         // General Switches
-        command_line->AppendSwitchWithValue("user-agent-product", "test/userAgent");
+        command_line->AppendSwitchWithValue("user-agent-product", "mechanix-browser/133");
         command_line->AppendSwitchWithValue("lang", "en-US");
         command_line->AppendSwitch("no-sandbox");
         command_line->AppendSwitch("hide-scrollbars");
@@ -122,8 +122,8 @@ void WebviewApp::OnBeforeCommandLineProcessing(const CefString &process_type, Ce
         // Platform & Graphics
         command_line->AppendSwitchWithValue("ozone-platform", "wayland");
         command_line->AppendSwitchWithValue("use-angle", "gles-egl");
+        command_line->AppendSwitchWithValue("touch-events", "enabled");
         command_line->AppendSwitch("enable-zero-copy");
-        command_line->AppendSwitch("enable-touch-events");
 
         // Performance & Optimization
         command_line->AppendSwitch("enable-low-end-device-mode");
@@ -133,18 +133,19 @@ void WebviewApp::OnBeforeCommandLineProcessing(const CefString &process_type, Ce
 
         // GPU & Video
         command_line->AppendSwitch("disable-gpu-sandbox");
-        command_line->AppendSwitch("enable-gles2-interface");
         command_line->AppendSwitch("all-hw-video-decode-backends");
         command_line->AppendSwitch("disable-gpu-memory-buffer-video-frames");
         command_line->AppendSwitch("disable-gpu-memory-buffer-compositor-resources");
         command_line->AppendSwitch("disable-gpu-shader-disk-cache");
 
         // User Agent
-        command_line->AppendSwitchWithValue("user-agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.6099.43 Mobile Safari/537.36");
+        // command_line->AppendSwitchWithValue("user-agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.6099.43 Mobile Safari/537.36");
+        command_line->AppendSwitchWithValue("user-agent", "Mozilla/5.0 (X11; Linux aarch64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.6943.142 Safari/537.36");
 
         // Security
-        command_line->AppendSwitch("disable-web-security");
-        command_line->AppendSwitch("allow-running-insecure-content");
+        // Note: This switch will stops the captcha and other security checks from working, so we will not use it for now
+        // command_line->AppendSwitch("disable-web-security");
+        // command_line->AppendSwitch("allow-running-insecure-content");
 
         // Media
         command_line->AppendSwitchWithValue("autoplay-policy", "no-user-gesture-required"); // autoplay policy for media
@@ -152,10 +153,6 @@ void WebviewApp::OnBeforeCommandLineProcessing(const CefString &process_type, Ce
         // Features (Enable/Disable)
         command_line->AppendSwitchWithValue("disable-features", "EnableHangWatcher,SameSiteByDefaultCookies,CookiesWithoutSameSiteMustBeSecure,CalculateNativeWinOcclusion,TranslateUI,MediaRouter,OptimizationGuideModelDownloading");
         command_line->AppendSwitchWithValue("enable-features", "UseOzonePlatform");
-
-		// Don't create a "GPUCache" directory when cache-path is unspecified.
-		command_line->AppendSwitch("disable-gpu-shader-disk-cache"); //disable gpu shader disk cache
-        command_line->AppendSwitch("no-sandbox");
 
 		//http://www.chromium.org/developers/design-documents/process-models
 		if (m_uMode == 1)
