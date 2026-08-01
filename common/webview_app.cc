@@ -117,6 +117,7 @@ void WebviewApp::OnBeforeCommandLineProcessing(const CefString &process_type, Ce
         command_line->AppendSwitchWithValue("user-agent-product", "mechanix-browser/133");
         command_line->AppendSwitchWithValue("lang", "en-US");
         command_line->AppendSwitch("no-sandbox");
+        command_line->AppendSwitch("hide-scrollbars");
 
         // Platform & Graphics
         command_line->AppendSwitchWithValue("ozone-platform", "wayland");
