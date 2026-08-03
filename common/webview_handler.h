@@ -16,12 +16,14 @@
 
 #include "webview_cookieVisitor.h"
 
-#define ColorUNDERLINE \
-  0xFF000000  // Black SkColor value for underline,
-              // same as Blink.
-#define ColorBKCOLOR \
-  0x00000000  // White SkColor value for background,
-              // same as Blink.
+#if defined(_WIN32)
+#define FLUTTER_PLUGIN_EXPORT __declspec(dllexport)
+#else
+#define FLUTTER_PLUGIN_EXPORT __attribute__((visibility("default")))
+#endif
+
+// signature: browserId, success, data ptr, size
+typedef void (*CaptureCompleteCallback)(int, bool, const unsigned char*, size_t);
 
 struct browser_info{
     CefRefPtr<CefBrowser> browser;
@@ -40,7 +42,6 @@ struct browser_info{
     // Store last painted buffer for screenshot capture
     std::vector<unsigned char> last_paint_buffer;
     bool capture_requested = false;
-    std::string pending_output_path;
 };
 
 class WebviewHandler : public CefClient,
@@ -79,17 +80,17 @@ public:
     
     // CefClient methods:
     virtual CefRefPtr<CefDisplayHandler> GetDisplayHandler() override {
-        return this;
+        return static_cast<CefDisplayHandler*>(this);
     }
     virtual CefRefPtr<CefLifeSpanHandler> GetLifeSpanHandler() override {
-        return this;
+        return static_cast<CefLifeSpanHandler*>(this);
     }
     virtual CefRefPtr<CefFocusHandler> GetFocusHandler() override {
-        return this;
+        return static_cast<CefFocusHandler*>(this);
     }
-    virtual CefRefPtr<CefLoadHandler> GetLoadHandler() override { return this; }
-    virtual CefRefPtr<CefRenderHandler> GetRenderHandler() override { return this; }
-    virtual CefRefPtr<CefDownloadHandler> GetDownloadHandler() override { return this; }
+    virtual CefRefPtr<CefLoadHandler> GetLoadHandler() override { return static_cast<CefLoadHandler*>(this); }
+    virtual CefRefPtr<CefRenderHandler> GetRenderHandler() override { return static_cast<CefRenderHandler*>(this); }
+    virtual CefRefPtr<CefDownloadHandler> GetDownloadHandler() override { return static_cast<CefDownloadHandler*>(this); }
 
 	bool OnProcessMessageReceived(
         CefRefPtr<CefBrowser> browser,
@@ -228,8 +229,10 @@ public:
     void setJavaScriptChannels(int browserId, const std::vector<std::string> channels);
     void sendJavaScriptChannelCallBack(const bool error, const std::string result, const std::string callbackId, const int browserId, const std::string frameId);
     void executeJavaScript(int browserId, const std::string code, std::function<void(CefRefPtr<CefValue>)> callback = nullptr);
-    std::string captureScreenshot(int browserId, const std::string& outputPath);
-    
+    void captureScreenshot(int browserId);
+
+    CaptureCompleteCallback onCaptureCompleteCallback = nullptr;
+
 private:
     // List of existing browser windows. Only accessed on the CEF UI thread.
     std::unordered_map<int, browser_info> browser_map_;

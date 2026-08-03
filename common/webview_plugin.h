@@ -47,6 +47,8 @@ namespace webview_cef {
         void imeCommitTextNative(const std::wstring& text);
         void imeFinishCompositionNative();
 
+        void setCaptureCompleteCallback(CaptureCompleteCallback callback);
+
     private :
         // Resolve the browserId whose renderer currently has focus, or -1.
         int focusedBrowserId();
@@ -75,6 +77,10 @@ namespace webview_cef {
     void doMessageLoopWork();
     void SwapBufferFromBgraToRgba(void* _dest, const void* _src, int width, int height);
     void stopCEF();
+
+    extern "C" {
+        FLUTTER_PLUGIN_EXPORT void webview_cef_set_capture_complete_callback(CaptureCompleteCallback callback);
+    }
 }
 
 #endif //WEBVIEW_PLUGIN_H
