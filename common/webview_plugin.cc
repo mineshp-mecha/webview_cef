@@ -9,12 +9,15 @@
 #include <thread>
 #include <iostream>
 #include <unordered_map>
+#include "webview_handler.h"
 
 namespace webview_cef {
 	CefMainArgs mainArgs;
 	CefRefPtr<WebviewApp> app;
 	CefString userAgent;
 	bool isCefInitialized = false;
+
+    static WebviewPlugin* g_plugin_for_ffi = nullptr;
 #ifdef OS_MAC
 	std::string g_macSubprocessPath;
 	std::string g_macFrameworkDirPath;
@@ -29,11 +32,13 @@ namespace webview_cef {
 	}
 #endif
 
-	WebviewPlugin::WebviewPlugin() {
+    WebviewPlugin::WebviewPlugin() {
 		m_handler = new WebviewHandler();
-        }
+		g_plugin_for_ffi = this;
+	}
 
     WebviewPlugin::~WebviewPlugin() {
+		if (g_plugin_for_ffi == this) g_plugin_for_ffi = nullptr;
 		uninitCallback();
 		m_handler->CloseAllBrowsers(true);
 		m_handler = nullptr;
@@ -742,11 +747,8 @@ namespace webview_cef {
 		}
 		else if (name.compare("captureScreenshot") == 0) {
 			int browserId = int(webview_value_get_int(webview_value_get_list_value(values, 0)));
-			const auto outputPath = webview_value_get_string(webview_value_get_list_value(values, 1));
-			std::string screenshotPath = m_handler->captureScreenshot(browserId, outputPath ? outputPath : "");
-			WValue* ret = webview_value_new_string(screenshotPath.c_str());
-			result(1, ret);
-			webview_value_unref(ret);
+			m_handler->captureScreenshot(browserId);
+			result(1, nullptr);
 		}
 		else {
 			result = 0;
@@ -829,6 +831,12 @@ namespace webview_cef {
 		auto it = m_renderers.find(browserId);
 		if(it != m_renderers.end() && it->second){
 			it->second->composing = composing;
+		}
+	}
+
+	void WebviewPlugin::setCaptureCompleteCallback(CaptureCompleteCallback callback) {
+		if (m_handler) {
+			m_handler->onCaptureCompleteCallback = callback;
 		}
 	}
 
@@ -944,5 +952,13 @@ namespace webview_cef {
     void stopCEF()
     {
 		CefShutdown();
+    }
+}
+
+extern "C" {
+    FLUTTER_PLUGIN_EXPORT void webview_cef_set_capture_complete_callback(CaptureCompleteCallback callback) {
+        if (webview_cef::g_plugin_for_ffi) {
+            webview_cef::g_plugin_for_ffi->setCaptureCompleteCallback(callback);
+        }
     }
 }

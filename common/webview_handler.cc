@@ -626,8 +626,8 @@ void WebviewHandler::imeSetComposition(int browserId, std::string text)
     cef_composition_underline_t underline = {};
     underline.range.from = 0;
     underline.range.to = static_cast<int>(0 + cTextStr.length());
-    underline.color = ColorUNDERLINE;
-    underline.background_color = ColorBKCOLOR;
+    underline.color = CefColorSetARGB(255, 0, 0, 0);
+    underline.background_color = CefColorSetARGB(0, 0, 0, 0);
     underline.thick = 0;
     underline.style = CEF_CUS_DOT;
     underlines.push_back(underline);
@@ -696,8 +696,8 @@ void WebviewHandler::imeSetCompositionNative(const std::wstring& text, int curso
     cef_composition_underline_t underline = {};
     underline.range.from = 0;
     underline.range.to = static_cast<int>(cTextStr.length());
-    underline.color = ColorUNDERLINE;
-    underline.background_color = ColorBKCOLOR;
+    underline.color = CefColorSetARGB(255, 0, 0, 0);
+    underline.background_color = CefColorSetARGB(0, 0, 0, 0);
     underline.thick = 0;
     underline.style = CEF_CUS_DOT;
     underlines.push_back(underline);
@@ -863,20 +863,17 @@ void WebviewHandler::executeJavaScript(int browserId, const std::string code, st
     }
 }
 
-std::string WebviewHandler::captureScreenshot(int browserId, const std::string& outputPath)
+void WebviewHandler::captureScreenshot(int browserId)
 {
     auto it = browser_map_.find(browserId);
-    if (it == browser_map_.end() || !it->second.browser.get()) {
-        return "";
+    if (it != browser_map_.end() && it->second.browser.get()) {
+        it->second.capture_requested = true;
+        
+        // --- PROACTIVE FIX: Check if we already have a buffer to capture from.
+        // OnPaint is only called when something changes. If the page is static,
+        // it might not be called for a while.
+        it->second.browser->GetHost()->Invalidate(PET_VIEW);
     }
-
-    it->second.capture_requested = true;
-    it->second.pending_output_path = outputPath;
-    
-    // Request a frame to be painted if not already painting
-    it->second.browser->GetHost()->Invalidate(PET_VIEW);
-
-    return outputPath;
 }
 
 void WebviewHandler::GetViewRect(CefRefPtr<CefBrowser> browser, CefRect &rect) {
@@ -906,18 +903,23 @@ bool WebviewHandler::GetScreenInfo(CefRefPtr<CefBrowser> browser, CefScreenInfo&
     return false;
 }
 
+void write_to_vector(png_structp png_ptr, png_bytep data, png_size_t length) {
+    auto* buf = static_cast<std::vector<unsigned char>*>(png_get_io_ptr(png_ptr));
+    buf->insert(buf->end(), data, data + length);
+}
+
 void WebviewHandler::OnPaint(CefRefPtr<CefBrowser> browser, CefRenderHandler::PaintElementType type,
                              const CefRenderHandler::RectList &dirtyRects, const void *buffer, int w, int h)
 {
     if (!browser->IsPopup())
     {
-        auto it = browser_map_.find(browser->GetIdentifier());
+        int browserId = browser->GetIdentifier();
+        auto it = browser_map_.find(browserId);
         if (it != browser_map_.end())
         {
             if (it->second.capture_requested)
             {
                 it->second.capture_requested = false;
-                std::string outputPath = it->second.pending_output_path;
 
                 // --- Resize + BGRA->RGB pack happens HERE, on the UI/paint thread,
                 // directly from the live `buffer` — no full-frame copy first.
@@ -951,33 +953,34 @@ void WebviewHandler::OnPaint(CefRefPtr<CefBrowser> browser, CefRenderHandler::Pa
                     }
                 }
 
-                // Background thread now only writes the small buffer to disk —
-                // no resize math, no access to the original CEF buffer at all.
-                std::thread([small, outputPath, target_w, target_h]()
+                // Background thread encodes to memory and invokes the Dart callback
+                std::thread([small, browserId, target_w, target_h, cb = onCaptureCompleteCallback]()
                             {
-                    std::string tmpPath = outputPath + ".tmp";
-                    FILE* fp = fopen(tmpPath.c_str(), "wb");
-                    if (!fp) return;
-
+                    std::vector<unsigned char> pngBuf;
                     png_structp png_ptr = png_create_write_struct(PNG_LIBPNG_VER_STRING, NULL, NULL, NULL);
-                    if (!png_ptr) { fclose(fp); return; }
-
-                    png_infop info_ptr = png_create_info_struct(png_ptr);
-                    if (!info_ptr) { png_destroy_write_struct(&png_ptr, NULL); fclose(fp); return; }
-
-                    if (setjmp(png_jmpbuf(png_ptr))) {
-                        png_destroy_write_struct(&png_ptr, &info_ptr);
-                        fclose(fp);
-                        remove(tmpPath.c_str());
+                    if (!png_ptr) {
+                        if (cb) cb(browserId, false, nullptr, 0);
                         return;
                     }
 
-                    png_init_io(png_ptr, fp);
+                    png_infop info_ptr = png_create_info_struct(png_ptr);
+                    if (!info_ptr) {
+                        png_destroy_write_struct(&png_ptr, NULL);
+                        if (cb) cb(browserId, false, nullptr, 0);
+                        return;
+                    }
+
+                    if (setjmp(png_jmpbuf(png_ptr))) {
+                        png_destroy_write_struct(&png_ptr, &info_ptr);
+                        if (cb) cb(browserId, false, nullptr, 0);
+                        return;
+                    }
+
+                    png_set_write_fn(png_ptr, &pngBuf, write_to_vector, NULL);
                     png_set_IHDR(png_ptr, info_ptr, target_w, target_h,
                                  8, PNG_COLOR_TYPE_RGB, PNG_INTERLACE_NONE,
                                  PNG_COMPRESSION_TYPE_BASE, PNG_FILTER_TYPE_BASE);
 
-                    // Tuned for flat-color UI content — smaller & often faster than defaults
                     png_set_compression_level(png_ptr, 6);
                     png_set_compression_strategy(png_ptr, Z_RLE);
                     png_set_filter(png_ptr, 0, PNG_FILTER_SUB);
@@ -990,13 +993,13 @@ void WebviewHandler::OnPaint(CefRefPtr<CefBrowser> browser, CefRenderHandler::Pa
                     }
 
                     png_write_end(png_ptr, NULL);
-                    png_destroy_write_struct(&png_ptr, &info_ptr);
-                    fclose(fp);
+                    
+                    if (cb) {
+                        cb(browserId, true, pngBuf.data(), pngBuf.size());
+                    }
 
-                    // Atomic-ish swap so a crash/power-loss never leaves a corrupt file
-                    // at outputPath — worst case you lose the .tmp, not the previous good file.
-                    rename(tmpPath.c_str(), outputPath.c_str()); })
-                    .detach();
+                    png_destroy_write_struct(&png_ptr, &info_ptr);
+                }).detach();
             }
             it->second.width = w;
             it->second.height = h;
