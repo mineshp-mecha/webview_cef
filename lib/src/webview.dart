@@ -522,8 +522,12 @@ class WebViewState extends State<WebView> with WebeViewTextInput {
     _controller._onFocusedNodeChangeMessage = (editable) {
       _composingText = '';
       currentTextEditingValue = const TextEditingValue();
-      editable ? attachTextInputClient() : detachTextInputClient();
-      _controller.setClientFocus(true);
+      if (editable) {
+        attachTextInputClient();
+        _controller.setClientFocus(true);
+      } else {
+        detachTextInputClient();
+      }
       _controller._focusEditable = editable;
     };
 
@@ -814,7 +818,9 @@ class WebViewState extends State<WebView> with WebeViewTextInput {
           },
           child: MouseRegion(
             cursor: _mouseType,
-            child: Texture(textureId: _controller._textureId),
+            child: Builder(builder: (context) {
+              return Texture(textureId: _controller._textureId);
+            }),
           ),
         ),
       ),
@@ -845,11 +851,19 @@ class WebViewState extends State<WebView> with WebeViewTextInput {
     double dpi = MediaQuery.of(context).devicePixelRatio;
     final box = _key.currentContext?.findRenderObject() as RenderBox?;
     if (box != null) {
+      final size = Size(box.size.width, box.size.height);
+      if (_lastReportedSize == size && _lastReportedDpi == dpi) {
+        return;
+      }
+      _lastReportedSize = size;
+      _lastReportedDpi = dpi;
       await _controller.ready;
-      unawaited(
-          _controller._setSize(dpi, Size(box.size.width, box.size.height)));
+      unawaited(_controller._setSize(dpi, size));
     }
   }
+
+  Size? _lastReportedSize;
+  double? _lastReportedDpi;
 }
 
 class StaticWebView extends StatelessWidget {
