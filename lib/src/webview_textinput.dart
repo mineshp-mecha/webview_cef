@@ -71,7 +71,13 @@ mixin WebeViewTextInput implements DeltaTextInputClient {
   insertContent(KeyboardInsertedContent content) {}
 
   @override
-  performAction(TextInputAction action) {}
+  performAction(TextInputAction action) {
+    // Send Enter key event when virtual keyboard action button (Enter, Done, Go, Search, etc.) is tapped
+    onVirtualAction(action);
+  }
+
+  void onVirtualAction(TextInputAction action) {}
+
 
   @override
   performPrivateCommand(String action, Map<String, dynamic> data) {}
@@ -89,7 +95,11 @@ mixin WebeViewTextInput implements DeltaTextInputClient {
   showToolbar() {}
 
   @override
-  updateEditingValue(TextEditingValue value) {}
+  updateEditingValue(TextEditingValue value) {
+    onVirtualEditingValue(value);
+  }
+
+  void onVirtualEditingValue(TextEditingValue value) {}
 
   @override
   updateFloatingCursor(RawFloatingCursorPoint point) {}

@@ -642,21 +642,20 @@ void WebviewHandler::imeSetComposition(int browserId, std::string text)
 void WebviewHandler::imeCommitText(int browserId, std::string text)
 {
     auto it = browser_map_.find(browserId);
-    if (it==browser_map_.end() || !it->second.browser.get()) {
+    if (it == browser_map_.end() || !it->second.browser.get())
+    {
         return;
     }
 
     CefString cTextStr = CefString(text);
+    if (cTextStr.empty())
+    {
+        return;
+    }
     it->second.is_ime_commit = true;
 
-    std::vector<CefCompositionUnderline> underlines;
-    auto selection_range_end = static_cast<int>(0 + cTextStr.length());
-    CefRange selection_range = CefRange(selection_range_end, selection_range_end);
-    // Establish the composition on all platforms before committing so the commit
-    // has a live composition to replace (previously skipped on Windows).
-    it->second.browser->GetHost()->ImeSetComposition(cTextStr, underlines, CefRange(UINT32_MAX, UINT32_MAX), selection_range);
+    // Commit the text directly to the focused web input element
     it->second.browser->GetHost()->ImeCommitText(cTextStr, CefRange(UINT32_MAX, UINT32_MAX), 0);
-
 }
 
 void WebviewHandler::setClientFocus(int browserId, bool focus)

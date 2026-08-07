@@ -9,7 +9,7 @@ import 'package:webview_cef/src/webview_inject_user_script.dart';
 import 'webview.dart';
 
 import 'dart:ffi';
-import 'package:ffi/ffi.dart';
+
 
 typedef CaptureCompleteCallbackNative = Void Function(
     Int32 browserId, Bool success, Pointer<Uint8> data, IntPtr size);
