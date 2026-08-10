@@ -412,33 +412,38 @@ class WebViewState extends State<WebView> with WebeViewTextInput {
 
   @override
   updateEditingValueWithDeltas(List<TextEditingDelta> textEditingDeltas) {
-    /// Handles IME composition only
+    /// Handles IME composition and virtual keyboard input
     for (var d in textEditingDeltas) {
       if (d is TextEditingDeltaInsertion) {
-        // composing text
         if (d.composing.isValid) {
           _composingText += d.textInserted;
           _controller.imeSetComposition(_composingText);
         } else {
-          // Directly committed text (e.g. English typing, or a commit delivered
-          // as a plain insertion). Must run on every platform, including Windows.
-          _controller.imeCommitText(d.textInserted);
+          if (d.textInserted == '\n' ||
+              d.textInserted == '\r' ||
+              d.textInserted == '\r\n') {
+            _sendVirtualKey(0x0D, character: 0x0D);
+          } else {
+            _controller.imeCommitText(d.textInserted);
+          }
         }
       } else if (d is TextEditingDeltaDeletion) {
-        if (d.composing.isValid) {
+        if (d.composing.isValid && _composingText.isNotEmpty) {
           if (_composingText == d.textDeleted) {
+            _composingText = "";
+          } else if (_composingText.length >= d.textDeleted.length) {
+            _composingText = _composingText.substring(
+                0, _composingText.length - d.textDeleted.length);
+          } else {
             _composingText = "";
           }
           _controller.imeSetComposition(_composingText);
         }
       } else if (d is TextEditingDeltaReplacement) {
         if (d.composing.isValid) {
-          // Composition is still ongoing (preedit revised).
           _composingText = d.replacementText;
           _controller.imeSetComposition(_composingText);
         } else {
-          // Composition finished (a candidate was selected): commit the final
-          // text. Without this the selected text was dropped and never shown.
           _controller.imeCommitText(d.replacementText);
           _composingText = '';
         }
@@ -449,6 +454,66 @@ class WebViewState extends State<WebView> with WebeViewTextInput {
         }
       }
     }
+
+    // Update the current value so onVirtualEditingValue has the correct oldText next time
+    // For OSR webview we don't have the full text state, but we can maintain it from deltas
+    // However, since we're using a fake TextEditingValue just to track diffs in onVirtualEditingValue,
+    // we can construct it from the deltas' resulting state if they provide it.
+    if (textEditingDeltas.isNotEmpty) {
+      currentTextEditingValue = textEditingDeltas.last.apply(currentTextEditingValue ?? const TextEditingValue());
+    }
+  }
+
+  void _sendVirtualKey(int keyCode, {int character = 0}) {
+    _controller.sendKeyEvent(
+      keyEventRawKeyDown,
+      keyCode,
+      eventFlagNone,
+      character,
+      character,
+    );
+    if (character != 0) {
+      _controller.sendKeyEvent(
+        keyEventChar,
+        keyCode,
+        eventFlagNone,
+        character,
+        character,
+      );
+    }
+    _controller.sendKeyEvent(
+      keyEventKeyUp,
+      keyCode,
+      eventFlagNone,
+      character,
+      character,
+    );
+  }
+
+  @override
+  void onVirtualAction(TextInputAction action) {
+    _sendVirtualKey(0x0D, character: 0x0D);
+  }
+
+  @override
+  void onVirtualEditingValue(TextEditingValue value) {
+    final oldText = currentTextEditingValue?.text ?? '';
+    final newText = value.text;
+    currentTextEditingValue = value;
+
+    if (newText.length < oldText.length) {
+      final deleteCount = oldText.length - newText.length;
+      for (int i = 0; i < deleteCount; i++) {
+        _sendVirtualKey(0x08, character: 0x08);
+      }
+    } else if (newText.length > oldText.length) {
+      final inserted = newText.substring(oldText.length);
+      if (inserted == '\n' || inserted == '\r' || inserted == '\r\n') {
+        _sendVirtualKey(0x0D, character: 0x0D);
+      } else {
+        _controller.imeCommitText(inserted);
+      }
+    }
   }
 
   @override
@@ -456,7 +521,13 @@ class WebViewState extends State<WebView> with WebeViewTextInput {
     super.initState();
     _controller._onFocusedNodeChangeMessage = (editable) {
       _composingText = '';
-      editable ? attachTextInputClient() : detachTextInputClient();
+      currentTextEditingValue = const TextEditingValue();
+      if (editable) {
+        attachTextInputClient();
+        _controller.setClientFocus(true);
+      } else {
+        detachTextInputClient();
+      }
       _controller._focusEditable = editable;
     };
 
@@ -516,6 +587,13 @@ class WebViewState extends State<WebView> with WebeViewTextInput {
     final logicalKey = event.logicalKey;
     final character = event.character;
 
+    // 1. If the key event has a character, let the TextInputClient handle it.
+    // This prevents doubling because updateEditingValueWithDeltas/onVirtualEditingValue
+    // will be responsible for sending the text to CEF.
+    if (character != null && character.isNotEmpty) {
+      return KeyEventResult.ignored;
+    }
+
     // Convert logical key to Windows keycode
     int keyCode = _logicalKeyToWindowsKeyCode(logicalKey);
 
@@ -546,20 +624,10 @@ class WebViewState extends State<WebView> with WebeViewTextInput {
       type,
       keyCode,
       modifiers,
-      character?.codeUnitAt(0) ?? 0,
-      character?.codeUnitAt(0) ?? 0,
+      0, // No character here as they are ignored above
+      0,
     );
 
-    // Send CHAR event after RAWKEYDOWN when character is present (required for text entry)
-    if (event is KeyDownEvent && character != null) {
-      _controller.sendKeyEvent(
-        keyEventChar,
-        keyCode,
-        modifiers,
-        character.codeUnitAt(0),
-        character.codeUnitAt(0),
-      );
-    }
     return KeyEventResult.handled;
   }
 
@@ -620,6 +688,7 @@ class WebViewState extends State<WebView> with WebeViewTextInput {
       debugLabel: "webview_cef",
       onFocusChange: (focused) {
         _composingText = '';
+        currentTextEditingValue = const TextEditingValue();
         if (focused) {
           _controller.setClientFocus(true);
           if (_controller._focusEditable) {
@@ -749,7 +818,9 @@ class WebViewState extends State<WebView> with WebeViewTextInput {
           },
           child: MouseRegion(
             cursor: _mouseType,
-            child: Texture(textureId: _controller._textureId),
+            child: Builder(builder: (context) {
+              return Texture(textureId: _controller._textureId);
+            }),
           ),
         ),
       ),
@@ -780,11 +851,19 @@ class WebViewState extends State<WebView> with WebeViewTextInput {
     double dpi = MediaQuery.of(context).devicePixelRatio;
     final box = _key.currentContext?.findRenderObject() as RenderBox?;
     if (box != null) {
+      final size = Size(box.size.width, box.size.height);
+      if (_lastReportedSize == size && _lastReportedDpi == dpi) {
+        return;
+      }
+      _lastReportedSize = size;
+      _lastReportedDpi = dpi;
       await _controller.ready;
-      unawaited(
-          _controller._setSize(dpi, Size(box.size.width, box.size.height)));
+      unawaited(_controller._setSize(dpi, size));
     }
   }
+
+  Size? _lastReportedSize;
+  double? _lastReportedDpi;
 }
 
 class StaticWebView extends StatelessWidget {
