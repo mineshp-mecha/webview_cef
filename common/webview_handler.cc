@@ -382,7 +382,12 @@ void WebviewHandler::createBrowser(std::string url, bool isPrivate, std::functio
         request_context = CefRequestContext::CreateContext(context_settings, nullptr);
     }
 
-    callback(CefBrowserHost::CreateBrowserSync(window_info, this, url, browser_settings, nullptr, request_context)->GetIdentifier());
+    auto browser = CefBrowserHost::CreateBrowserSync(window_info, this, url, browser_settings, nullptr, request_context);
+    if (!browser) {
+        callback(-1);
+        return;
+    }
+    callback(browser->GetIdentifier());
 #ifdef WEBVIEW_CEF_GPU_TEXTURE
     // The GPU shared-texture path is the only render path on this build (no
     // OnPaint fallback). If no accelerated frame arrives shortly, the GPU

@@ -10,6 +10,7 @@
 #include <iostream>
 #include <unordered_map>
 #include "webview_handler.h"
+#include <filesystem>
 
 namespace webview_cef {
 	CefMainArgs mainArgs;
@@ -382,7 +383,7 @@ namespace webview_cef {
 	}
 
 
-    void WebviewPlugin::HandleMethodCall(std::string name, WValue* values, std::function<void(int ,WValue*)> result) {
+   	void WebviewPlugin::HandleMethodCall(std::string name, WValue* values, std::function<void(int ,WValue*)> result) {
 		if (name.compare("init") == 0){
 			if(!isCefInitialized){
 				if(values != nullptr){
@@ -903,6 +904,9 @@ namespace webview_cef {
 		CefSettings cefs;
 		cefs.windowless_rendering_enabled = true;
 		cefs.no_sandbox = true;
+		std::string cachePath = std::string(std::getenv("HOME") ? std::getenv("HOME") : "/tmp") + "/.cache/mechanix_browser/cef_cache"; 
+		std::filesystem::create_directories(cachePath); 
+		CefString(&cefs.root_cache_path).FromString(cachePath);
 		if(!userAgent.empty()){
 			CefString(&cefs.user_agent_product) = userAgent;
 		}

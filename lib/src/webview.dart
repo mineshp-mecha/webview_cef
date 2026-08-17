@@ -44,8 +44,8 @@ class WebViewController extends ValueNotifier<bool> {
   Widget get webviewWidget => _webviewWidget;
   Widget get loadingWidget => _loadingWidget ?? const Text("loading...");
 
-  late Completer<void> _creatingCompleter;
-  Future<void> get ready => _creatingCompleter.future;
+  Completer<void>? _creatingCompleter;
+  Future<void> get ready => _creatingCompleter?.future ?? Future<void>.value();
   bool _isDisposed = false;
   bool _focusEditable = false;
 
@@ -80,9 +80,15 @@ class WebViewController extends ValueNotifier<bool> {
     if (_isDisposed) {
       return Future<void>.value();
     }
-    _creatingCompleter = Completer<void>();
+    final existingCompleter = _creatingCompleter;
+    if (existingCompleter != null) {
+      return existingCompleter.future;
+    }
+
+    final creatingCompleter = Completer<void>();
+    _creatingCompleter = creatingCompleter;
     try {
-      await WebviewManager().ready;
+      await WebviewManager().initialize();
       List args = await _pluginChannel.invokeMethod('create', [url, isPrivate]);
       _browserId = args[0] as int;
       _textureId = args[1] as int;
@@ -90,11 +96,12 @@ class WebViewController extends ValueNotifier<bool> {
       await Future.delayed(const Duration(milliseconds: 50));
       _webviewWidget = WebView(this);
       value = true;
-      _creatingCompleter.complete();
+      creatingCompleter.complete();
     } on PlatformException catch (e) {
-      _creatingCompleter.completeError(e);
+      creatingCompleter.completeError(e);
+      _creatingCompleter = null;
     }
-    return _creatingCompleter.future;
+    return creatingCompleter.future;
   }
 
   setWebviewListener(WebviewEventsListener listener) {
@@ -103,7 +110,7 @@ class WebViewController extends ValueNotifier<bool> {
 
   @override
   Future<void> dispose() async {
-    await _creatingCompleter.future;
+    await _creatingCompleter?.future;
     if (!_isDisposed) {
       _isDisposed = true;
       WebviewManager().removeWebView(_browserId);
