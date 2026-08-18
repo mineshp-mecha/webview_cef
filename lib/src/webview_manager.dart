@@ -21,7 +21,7 @@ class WebviewManager extends ValueNotifier<bool> {
 
   factory WebviewManager() => _instance;
 
-  late Completer<void> _creatingCompleter;
+  Completer<void>? _creatingCompleter;
 
   final MethodChannel pluginChannel = const MethodChannel("webview_cef");
 
@@ -79,7 +79,13 @@ class WebviewManager extends ValueNotifier<bool> {
     );
   }
 
-  get ready => _creatingCompleter.future;
+  Future<void> get ready {
+    final completer = _creatingCompleter;
+    if (completer != null) {
+      return completer.future;
+    }
+    return initialize();
+  }
 
   /// Returns true if the platform has native key event handling (e.g., GTK on desktop Linux).
   /// When false, Dart-side key handling should be used (e.g., eLinux).
@@ -110,7 +116,13 @@ class WebviewManager extends ValueNotifier<bool> {
   WebviewManager._internal() : super(false);
 
   Future<void> initialize({String? userAgent}) async {
-    _creatingCompleter = Completer<void>();
+    final existingCompleter = _creatingCompleter;
+    if (existingCompleter != null) {
+      return existingCompleter.future;
+    }
+
+    final creatingCompleter = Completer<void>();
+    _creatingCompleter = creatingCompleter;
     try {
       if (userAgent != null && userAgent.isNotEmpty) {
         await pluginChannel.invokeMethod('init', userAgent);
@@ -121,12 +133,13 @@ class WebviewManager extends ValueNotifier<bool> {
       _registerCaptureCallback();
       // Wait for the platform to complete initialization.
       await Future.delayed(const Duration(milliseconds: 300));
-      _creatingCompleter.complete();
+      creatingCompleter.complete();
       value = true;
     } on PlatformException catch (e) {
-      _creatingCompleter.completeError(e);
+      creatingCompleter.completeError(e);
+      _creatingCompleter = null;
     }
-    return _creatingCompleter.future;
+    return creatingCompleter.future;
   }
 
   @override
