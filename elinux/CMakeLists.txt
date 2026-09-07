@@ -27,6 +27,8 @@ set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CEF_ROOT}/cmake")
 find_package(CEF REQUIRED)
 find_package(PNG REQUIRED)
 find_package(ZLIB REQUIRED)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(DRM REQUIRED libdrm)
 
 set(PLUGIN_NAME "webview_cef_plugin")
 
@@ -51,10 +53,11 @@ apply_standard_settings(${PLUGIN_NAME})
 
 set_target_properties(${PLUGIN_NAME} PROPERTIES
   CXX_VISIBILITY_PRESET hidden)
-target_compile_definitions(${PLUGIN_NAME} PRIVATE FLUTTER_PLUGIN_IMPL)
+target_compile_definitions(${PLUGIN_NAME} PRIVATE FLUTTER_PLUGIN_IMPL WEBVIEW_CEF_GPU_TEXTURE)
 
 target_include_directories(${PLUGIN_NAME} INTERFACE
   "${CMAKE_CURRENT_SOURCE_DIR}/include")
+target_include_directories(${PLUGIN_NAME} PRIVATE ${DRM_INCLUDE_DIRS})
 target_link_libraries(${PLUGIN_NAME} PRIVATE 
       flutter
       flutter_wrapper_plugin
@@ -62,6 +65,9 @@ target_link_libraries(${PLUGIN_NAME} PRIVATE
       ${CEF_LIB_DEPS}
       PNG::PNG
       ZLIB::ZLIB
+      EGL
+      GLESv2
+      ${DRM_LIBRARIES}
 )
 # The flutter target here refers to the library provided by the elinux toolchain
 # which is automatically configured in the example/elinux build.

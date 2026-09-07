@@ -1038,9 +1038,12 @@ void WebviewHandler::OnAcceleratedPaint(CefRefPtr<CefBrowser> browser, CefRender
         // The shared texture is pool-owned and only valid for the duration of
         // this callback. On Windows it is a HANDLE (open with
         // ID3D11Device1::OpenSharedResource1); on macOS it is an IOSurfaceRef.
+        // On Linux it is a pointer to cef_accelerated_paint_info_t.
         // The platform renderer wraps/copies it before returning.
 #ifdef __APPLE__
         const void* sharedTexture = reinterpret_cast<const void*>(info.shared_texture_io_surface);
+#elif defined(OS_LINUX)
+        const void* sharedTexture = &info;
 #else
         const void* sharedTexture = reinterpret_cast<const void*>(info.shared_texture_handle);
 #endif

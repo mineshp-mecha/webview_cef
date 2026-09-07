@@ -14,6 +14,87 @@
 #include <webview_plugin.h>
 #include "webview_cef_texture.h"
 
+#ifdef WEBVIEW_CEF_GPU_TEXTURE
+#include <include/internal/cef_types_linux.h>
+#include <libdrm/drm_fourcc.h>
+#include <EGL/egl.h>
+#include <EGL/eglext.h>
+#include <GLES2/gl2.h>
+#include <GLES2/gl2ext.h>
+
+class WebviewGpuTextureRenderer : public webview_cef::WebviewTexture {
+ public:
+  WebviewGpuTextureRenderer(FlutterDesktopTextureRegistrarRef registrar_ref)
+      : registrar_ref_(registrar_ref) {
+    texture_ = std::make_unique<WebviewGpuTexture>(registrar_ref_);
+    textureId = texture_->textureId;
+  }
+
+  ~WebviewGpuTextureRenderer() override {
+    FlutterDesktopTextureRegistrarUnregisterExternalTexture(registrar_ref_, texture_->textureId, nullptr, nullptr);
+  }
+
+  void onAcceleratedFrame(const void* sharedHandle, int width, int height, int format) override {
+    if (!sharedHandle) return;
+    auto* info = static_cast<const cef_accelerated_paint_info_t*>(sharedHandle);
+    if (!info || info->plane_count == 0) return;
+
+    std::cout << "[WebviewCEF-BUILD-7] onAcceleratedFrame: " << width << "x" << height 
+              << " FD: " << info->planes[0].fd << std::endl;
+
+    std::lock_guard<std::mutex> lock(texture_->mutex);
+    
+    // For eLinux on i.MX8MP, we expect DMA-BUF.
+    // We need to create an EGLImage from the DMA-BUF FD.
+    
+    EGLDisplay display = eglGetCurrentDisplay();
+    if (display == EGL_NO_DISPLAY) return;
+
+    // Cleanup old image
+    if (texture_->egl_image) {
+      auto eglDestroyImageKHR = (PFNEGLDESTROYIMAGEKHRPROC)eglGetProcAddress("eglDestroyImageKHR");
+      if (eglDestroyImageKHR) {
+        eglDestroyImageKHR(display, (EGLImageKHR)texture_->egl_image);
+      }
+      texture_->egl_image = nullptr;
+    }
+
+    EGLint attribs[] = {
+        EGL_WIDTH, (EGLint)width,
+        EGL_HEIGHT, (EGLint)height,
+        EGL_LINUX_DRM_FOURCC_EXT, (EGLint)((info->format == CEF_COLOR_TYPE_RGBA_8888) ? DRM_FORMAT_ABGR8888 : DRM_FORMAT_ARGB8888),
+        EGL_DMA_BUF_PLANE0_FD_EXT, (EGLint)info->planes[0].fd,
+        EGL_DMA_BUF_PLANE0_OFFSET_EXT, (EGLint)info->planes[0].offset,
+        EGL_DMA_BUF_PLANE0_PITCH_EXT, (EGLint)info->planes[0].stride,
+        EGL_NONE
+    };
+
+    std::cout << "[WebviewCEF-BUILD-7] Importing FD: " << info->planes[0].fd 
+              << " Stride: " << info->planes[0].stride 
+              << " Offset: " << info->planes[0].offset 
+              << " Size: " << width << "x" << height << std::endl;
+
+    auto eglCreateImageKHR = (PFNEGLCREATEIMAGEKHRPROC)eglGetProcAddress("eglCreateImageKHR");
+    if (!eglCreateImageKHR) return;
+
+    EGLImageKHR image = eglCreateImageKHR(display, EGL_NO_CONTEXT, EGL_LINUX_DRM_FOURCC_EXT, NULL, attribs);
+    if (image != EGL_NO_IMAGE_KHR) {
+      texture_->egl_image = image;
+      texture_->width = width;
+      texture_->height = height;
+      FlutterDesktopTextureRegistrarMarkExternalTextureFrameAvailable(registrar_ref_, texture_->textureId);
+    } else {
+      EGLint err = eglGetError();
+      std::cerr << "[WebviewCEF-BUILD-7] eglCreateImageKHR failed: 0x" << std::hex << err << std::dec << std::endl;
+    }
+  }
+
+ private:
+  FlutterDesktopTextureRegistrarRef registrar_ref_;
+  std::unique_ptr<WebviewGpuTexture> texture_;
+};
+#endif
+
 std::unordered_map<int64_t, std::shared_ptr<webview_cef::WebviewPlugin>> webviewPlugins;
 
 class WebviewTextureRenderer : public webview_cef::WebviewTexture {
@@ -125,13 +206,13 @@ static WValue* decode_to_wvalue(const flutter::EncodableValue& val) {
 
 class WebviewCefPlugin : public flutter::Plugin {
  public:
-  static void RegisterWithRegistrar(flutter::PluginRegistrar* registrar, int64_t window_id) {
+  static void RegisterWithRegistrar(flutter::PluginRegistrar* registrar, FlutterDesktopTextureRegistrarRef registrar_ref, int64_t window_id) {
     auto channel = std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
         registrar->messenger(), "webview_cef",
         &flutter::StandardMethodCodec::GetInstance());
 
     auto plugin = std::make_unique<WebviewCefPlugin>(
-        registrar->texture_registrar(), std::move(channel));
+        registrar->texture_registrar(), registrar_ref, std::move(channel));
 
     // Populate the map and set the window_id_
     plugin->SetWindowId(window_id);
@@ -139,11 +220,17 @@ class WebviewCefPlugin : public flutter::Plugin {
   }
 
   WebviewCefPlugin(flutter::TextureRegistrar* texture_registrar,
-                   std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> channel)
-      : texture_registrar_(texture_registrar),
-        channel_(std::move(channel)),
-        plugin_(std::make_shared<webview_cef::WebviewPlugin>()) {
-
+                  FlutterDesktopTextureRegistrarRef registrar_ref,
+                  std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> channel)
+#ifndef WEBVIEW_CEF_GPU_TEXTURE
+    : texture_registrar_(texture_registrar),
+#else
+    :
+#endif
+      registrar_ref_(registrar_ref),
+      channel_(std::move(channel)),
+      plugin_(std::make_shared<webview_cef::WebviewPlugin>()) {
+        
     channel_->SetMethodCallHandler(
         [this](const flutter::MethodCall<flutter::EncodableValue>& call,
                std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result) {
@@ -157,7 +244,11 @@ class WebviewCefPlugin : public flutter::Plugin {
     });
 
     plugin_->setCreateTextureFunc([this]() {
+#ifdef WEBVIEW_CEF_GPU_TEXTURE
+      auto renderer = std::make_shared<WebviewGpuTextureRenderer>(registrar_ref_);
+#else
       auto renderer = std::make_shared<WebviewTextureRenderer>(texture_registrar_);
+#endif
       return std::dynamic_pointer_cast<webview_cef::WebviewTexture>(renderer);
     });
   }
@@ -201,10 +292,13 @@ class WebviewCefPlugin : public flutter::Plugin {
            });
      }
 
+#ifndef WEBVIEW_CEF_GPU_TEXTURE
   flutter::TextureRegistrar* texture_registrar_;
-  std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> channel_;
-  std::shared_ptr<webview_cef::WebviewPlugin> plugin_;
-  int64_t window_id_ = 0;
+#endif
+FlutterDesktopTextureRegistrarRef registrar_ref_;
+std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> channel_;
+std::shared_ptr<webview_cef::WebviewPlugin> plugin_;
+int64_t window_id_ = 0;
 };
 
 // ── C entry points ───────────────────────────────────────────────────────────
@@ -218,6 +312,7 @@ void webview_cef_plugin_register_with_registrar(
   WebviewCefPlugin::RegisterWithRegistrar(
       flutter::PluginRegistrarManager::GetInstance()
           ->GetRegistrar<flutter::PluginRegistrar>(registrar),
+      FlutterDesktopRegistrarGetTextureRegistrar(registrar),
       window_id);
 }
 
