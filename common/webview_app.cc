@@ -113,7 +113,8 @@ void WebviewApp::OnBeforeCommandLineProcessing(const CefString &process_type, Ce
 		}
 #endif
 
-		command_line->AppendSwitch("disable-web-security");                                     //disable web security
+   // command_line->AppendSwitch("in-process-gpu");
+ //command_line->AppendSwitchWithValue("ozone-platform", "wayland");
 		command_line->AppendSwitch("allow-running-insecure-content");                           //allow running insecure content in secure pages
 		// Don't create a "GPUCache" directory when cache-path is unspecified.
 		command_line->AppendSwitch("disable-gpu-shader-disk-cache");                            //disable gpu shader disk cache
@@ -150,6 +151,28 @@ void WebviewApp::OnBeforeCommandLineProcessing(const CefString &process_type, Ce
             values += ",CalculateNativeWinOcclusion";
         }
 
+#if defined(__linux__)
+        if (m_bEnableGPU)
+        {
+            // GC7000 via Etnaviv only exposes GLES through EGL — no desktop GL/GLX.
+            command_line->AppendSwitchWithValue("use-gl", "egl");
+            command_line->AppendSwitchWithValue("use-angle", "gles");
+
+            // Etnaviv/Vivante is very likely not on Chromium's GPU allowlist,
+            // which silently forces SwiftShader software rendering even with
+            // GPU "enabled". This is usually the actual reason people see no
+            // acceleration despite disable-gpu being absent.
+            command_line->AppendSwitch("ignore-gpu-blocklist");
+            command_line->AppendSwitch("ignore-gpu-blacklist"); // older alias, harmless if unused
+
+            command_line->AppendSwitch("enable-gpu-rasterization");
+
+            // Etnaviv's DRM/GBM ioctls commonly get blocked by the GPU sandbox
+            // on embedded boards without proper seccomp policy tuning.
+            command_line->AppendSwitch("disable-gpu-sandbox");
+        }
+#endif
+
         command_line->AppendSwitchWithValue("disable-features", values);
         // for unsafe domain, add domain to whitelist
 		if (!m_strFilterDomain.empty())
@@ -167,7 +190,14 @@ void WebviewApp::OnBeforeCommandLineProcessing(const CefString &process_type, Ce
     // selected by m_uMode above, like the other platforms.
 #endif
 #ifdef __linux__
-                                           
+    // ANGLE's desktop-GL backend (use-angle=gl) does not go through native GLES,
+    // so MESA_GLES_VERSION_OVERRIDE is no longer needed and has been removed.
+    // The MESA_GLSL_VERSION_OVERRIDE is also unnecessary on this path.
+
+    if (!command_line->HasSwitch("ozone-platform"))
+    {
+        command_line->AppendSwitchWithValue("ozone-platform", "wayland");
+    }
 #endif
 }
 

@@ -83,7 +83,7 @@ bool WebviewHandler::OnProcessMessageReceived(
 	    }
 
         onJavaScriptChannelMessage(
-            fun_name,param,stringpatch::to_string(js_callback_id), browser->GetIdentifier(), frame->GetIdentifier().ToString());
+            fun_name,param,stringpatch::to_string(js_callback_id), browser->GetIdentifier(), stringpatch::to_string(frame->GetIdentifier()));
     }
     else if(message_name == kEvaluateCallbackMessage){
         CefString callbackId = message->GetArgumentList()->GetString(0);
@@ -167,7 +167,6 @@ void WebviewHandler::OnBeforeClose(CefRefPtr<CefBrowser> browser) {
 
 bool WebviewHandler::OnBeforePopup(CefRefPtr<CefBrowser> browser,
                                   CefRefPtr<CefFrame> frame,
-                                  int popup_id,
                                   const CefString& target_url,
                                   const CefString& target_frame_name,
                                   WindowOpenDisposition target_disposition,
@@ -681,17 +680,15 @@ void WebviewHandler::sendJavaScriptChannelCallBack(const bool error, const std::
     args->SetString(2, result);
     auto bit = browser_map_.find(browserId);
     if(bit != browser_map_.end()){
-        int64_t frameIdInt = atoll(frameId.c_str());
+            int64_t frameIdInt = atoll(frameId.c_str());
 
-        CefRefPtr<CefFrame> frame = bit->second.browser->GetMainFrame();
+            CefRefPtr<CefFrame> frame = bit->second.browser->GetMainFrame();
 
-        // CefFrame::GetIdentifier() returns a string identifier in current CEF
-        // (since CEF 122) on every platform.
-        bool identifierMatch = std::stoll(frame->GetIdentifier().ToString()) == frameIdInt;
-        if (identifierMatch)
-        {
-            frame->SendProcessMessage(PID_RENDERER, message);
-        }
+            bool identifierMatch = frame->GetIdentifier() == frameIdInt;
+            if (identifierMatch)
+            {
+                frame->SendProcessMessage(PID_RENDERER, message);
+            }
     }
 }
 
@@ -763,7 +760,7 @@ void WebviewHandler::OnPaint(CefRefPtr<CefBrowser> browser, CefRenderHandler::Pa
 }
 
 void WebviewHandler::OnAcceleratedPaint(CefRefPtr<CefBrowser> browser, CefRenderHandler::PaintElementType type,
-                            const CefRenderHandler::RectList &dirtyRects, const CefAcceleratedPaintInfo &info) {
+                            const CefRenderHandler::RectList &dirtyRects, void* shared_handle) {
 #ifdef WEBVIEW_CEF_GPU_TEXTURE
     if (!browser->IsPopup() && onAcceleratedPaintCallback != nullptr) {
         received_accelerated_frame_ = true;
@@ -786,13 +783,10 @@ void WebviewHandler::OnAcceleratedPaint(CefRefPtr<CefBrowser> browser, CefRender
         // this callback. On Windows it is a HANDLE (open with
         // ID3D11Device1::OpenSharedResource1); on macOS it is an IOSurfaceRef.
         // The platform renderer wraps/copies it before returning.
-#ifdef __APPLE__
-        const void* sharedTexture = reinterpret_cast<const void*>(info.shared_texture_io_surface);
-#else
-        const void* sharedTexture = reinterpret_cast<const void*>(info.shared_texture_handle);
-#endif
-        onAcceleratedPaintCallback(browser->GetIdentifier(), sharedTexture,
-                                   w, h, static_cast<int>(info.format));
+    const void* sharedTexture = reinterpret_cast<const void*>(shared_handle);
+    // Format is not provided by this CEF version; pass 0 as unknown.
+    onAcceleratedPaintCallback(browser->GetIdentifier(), sharedTexture,
+                   w, h, 0);
     }
 #endif
 }

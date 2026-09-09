@@ -108,7 +108,6 @@ public:
     virtual void OnBeforeClose(CefRefPtr<CefBrowser> browser) override;
     virtual bool OnBeforePopup(CefRefPtr<CefBrowser> browser,
                                CefRefPtr<CefFrame> frame,
-                               int popup_id,
                                const CefString& target_url,
                                const CefString& target_frame_name,
                                WindowOpenDisposition target_disposition,
@@ -140,7 +139,7 @@ public:
     // CefRenderHandler methods:
     virtual void GetViewRect(CefRefPtr<CefBrowser> browser, CefRect& rect) override;
     virtual void OnPaint(CefRefPtr<CefBrowser> browser, PaintElementType type, const RectList& dirtyRects, const void* buffer, int width, int height) override;
-    virtual void OnAcceleratedPaint(CefRefPtr<CefBrowser> browser, PaintElementType type, const RectList& dirtyRects, const CefAcceleratedPaintInfo& info) override;
+    virtual void OnAcceleratedPaint(CefRefPtr<CefBrowser> browser, PaintElementType type, const RectList& dirtyRects, void* shared_handle) override;
     virtual bool GetScreenInfo(CefRefPtr<CefBrowser> browser, CefScreenInfo& screen_info) override;
     virtual bool StartDragging(CefRefPtr<CefBrowser> browser,
                                CefRefPtr<CefDragData> drag_data,

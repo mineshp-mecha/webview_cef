@@ -4,6 +4,7 @@
 #include <include/wrapper/cef_library_loader.h>
 #endif
 
+#include <cstdlib>
 #include <math.h>
 #include <memory>
 #include <thread>
@@ -45,19 +46,19 @@ namespace webview_cef {
 	void WebviewPlugin::initCallback() {
 		if (!m_init)
 		{
-			m_handler->onPaintCallback = [=, this](int browserId, const void* buffer, int32_t width, int32_t height) {
+			m_handler->onPaintCallback = [this](int browserId, const void* buffer, int32_t width, int32_t height) {
 				if (m_renderers.find(browserId) != m_renderers.end() && m_renderers[browserId] != nullptr) {
 					m_renderers[browserId]->onFrame(buffer, width, height);
 				}
 			};
 
-			m_handler->onAcceleratedPaintCallback = [=, this](int browserId, const void* sharedHandle, int32_t width, int32_t height, int32_t format) {
+			m_handler->onAcceleratedPaintCallback = [this](int browserId, const void* sharedHandle, int32_t width, int32_t height, int32_t format) {
 				if (m_renderers.find(browserId) != m_renderers.end() && m_renderers[browserId] != nullptr) {
 					m_renderers[browserId]->onAcceleratedFrame(sharedHandle, width, height, format);
 				}
 			};
 
-			m_handler->onTooltipEvent = [=, this](int browserId, std::string text) {
+			m_handler->onTooltipEvent = [this](int browserId, std::string text) {
 				if (m_invokeFunc) {
 					WValue* bId = webview_value_new_int(browserId);
 					WValue* wText = webview_value_new_string(const_cast<char*>(text.c_str()));
@@ -71,7 +72,7 @@ namespace webview_cef {
 				}
 			};
 
-			m_handler->onCursorChangedEvent = [=, this](int browserId, int type) {
+			m_handler->onCursorChangedEvent = [this](int browserId, int type) {
 				if(m_invokeFunc){
 					WValue* bId = webview_value_new_int(browserId);
 					WValue* wType = webview_value_new_int(type);
@@ -85,7 +86,7 @@ namespace webview_cef {
 				}
 			};
 
-			m_handler->onConsoleMessageEvent = [=, this](int browserId, int level, std::string message, std::string source, int line){
+			m_handler->onConsoleMessageEvent = [this](int browserId, int level, std::string message, std::string source, int line){
 				if(m_invokeFunc){
 					WValue* bId = webview_value_new_int(browserId);
 					WValue* wLevel = webview_value_new_int(level);
@@ -108,7 +109,7 @@ namespace webview_cef {
 				}
 			};
 
-			m_handler->onUrlChangedEvent = [=, this](int browserId, std::string url)
+			m_handler->onUrlChangedEvent = [this](int browserId, std::string url)
 			{
 				if (m_invokeFunc)
 				{
@@ -124,7 +125,7 @@ namespace webview_cef {
 				}
 			};
 
-			m_handler->onTitleChangedEvent = [=, this](int browserId, std::string title)
+			m_handler->onTitleChangedEvent = [this](int browserId, std::string title)
 			{
 				if (m_invokeFunc)
 				{
@@ -140,7 +141,7 @@ namespace webview_cef {
 				}
 			};
 
-			m_handler->onJavaScriptChannelMessage = [=, this](std::string channelName, std::string message, std::string callbackId, int browserId, std::string frameId)
+			m_handler->onJavaScriptChannelMessage = [this](std::string channelName, std::string message, std::string callbackId, int browserId, std::string frameId)
 			{
 				if (m_invokeFunc)
 				{
@@ -165,7 +166,7 @@ namespace webview_cef {
 				}
 			};
 
-			m_handler->onFocusedNodeChangeMessage = [=, this](int nBrowserId, bool bEditable)
+			m_handler->onFocusedNodeChangeMessage = [this](int nBrowserId, bool bEditable)
 			{
 				// Track editable focus per browser so the platform layer can route
 				// raw character keys to the OS IME while a web input is focused
@@ -190,7 +191,7 @@ namespace webview_cef {
 				}
 			};
 
-			m_handler->onImeCompositionRangeChangedMessage = [=, this](int nBrowserId, int32_t x, int32_t y, int32_t height)
+			m_handler->onImeCompositionRangeChangedMessage = [this](int nBrowserId, int32_t x, int32_t y, int32_t height)
 			{
 				if (m_invokeFunc)
 				{
@@ -213,7 +214,7 @@ namespace webview_cef {
 			};
 
 
-            m_handler->onLoadStart = [=, this](int nBrowserId, std::string urlId)
+			m_handler->onLoadStart = [this](int nBrowserId, std::string urlId)
             {
                 if (m_invokeFunc)
                 {
@@ -229,7 +230,7 @@ namespace webview_cef {
                 }
             };
 
-            m_handler->onLoadEnd = [=, this](int nBrowserId, std::string urlId)
+			m_handler->onLoadEnd = [this](int nBrowserId, std::string urlId)
             {
                 if (m_invokeFunc)
                 {
@@ -282,7 +283,7 @@ namespace webview_cef {
 		}
 		else if (name.compare("create") == 0) {
 			std::string url = webview_value_get_string(values);
-			m_handler->createBrowser(url, [=, this](int browserId) {
+				m_handler->createBrowser(url, [this, result](int browserId) {
 				std::shared_ptr<WebviewTexture> renderer = m_createTextureFunc();
 				m_renderers[browserId] = renderer;
 				WValue	*response = webview_value_new_list();
@@ -675,6 +676,15 @@ namespace webview_cef {
 
 	int initCEFProcesses()
 	{
+#if defined(__linux__)
+		// With use-gl=egl, Chromium's GPU process requests a GLES 3.0 context directly
+		// from the Mesa EGL driver. The Vivante GC7000 reports max GLES 2.0, so without
+		// this override eglCreateContext fails immediately. Setting the override allows
+		// context creation to succeed; actual GLES 3.0 feature availability depends on
+		// which GC7000 variant is present (GC7000L supports GLES 3.1 natively).
+		setenv("MESA_GLES_VERSION_OVERRIDE", "3.0", 0);
+		setenv("MESA_GLSL_VERSION_OVERRIDE", "300es", 0);
+#endif
 #ifdef OS_MAC
 		CefScopedLibraryLoader loader;
 		if(!loader.LoadInMain()) {
