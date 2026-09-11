@@ -74,6 +74,10 @@ apply_standard_settings(${PLUGIN_NAME})
 set_target_properties(${PLUGIN_NAME} PROPERTIES
   CXX_VISIBILITY_PRESET hidden)
 target_compile_definitions(${PLUGIN_NAME} PRIVATE FLUTTER_PLUGIN_IMPL HAS_GTK)
+option(WEBVIEW_CEF_GPU_TEXTURE "Use the Linux accelerated DMA-BUF texture path" ON)
+if(WEBVIEW_CEF_GPU_TEXTURE)
+  target_compile_definitions(${PLUGIN_NAME} PRIVATE WEBVIEW_CEF_GPU_TEXTURE)
+endif()
 
 # Source include directories and library dependencies. Add any plugin-specific
 # dependencies here.
@@ -102,7 +106,7 @@ endif()
 # add_executable(${CEF_TARGET} ${CEFCLIENT_SRCS})
 SET_EXECUTABLE_TARGET_PROPERTIES(${CEF_TARGET})
 add_dependencies(${CEF_TARGET} libcef_dll_wrapper)
-target_link_libraries(${CEF_TARGET} PUBLIC libcef_lib libcef_dll_wrapper "GL" ${CEF_STANDARD_LIBS})
+target_link_libraries(${CEF_TARGET} PUBLIC libcef_lib libcef_dll_wrapper "GL" "EGL" ${CEF_STANDARD_LIBS})
 
 # Set rpath so that libraries can be placed next to the executable.
 set_target_properties(${CEF_TARGET} PROPERTIES INSTALL_RPATH "$ORIGIN")

@@ -2,9 +2,9 @@
 
 #include <flutter_linux/flutter_linux.h>
 #include <gtk/gtk.h>
-#include <sys/utsname.h>
 
-#include <cstring>
+#include <fcntl.h>
+#include <functional>
 #include <unordered_map>
 #include <webview_plugin.h>
 #include "webview_cef_keyevent.h"
@@ -26,6 +26,50 @@ G_DEFINE_TYPE(WebviewCefPlugin, webview_cef_plugin, g_object_get_type())
 
 std::unordered_map<int64_t, std::shared_ptr<webview_cef::WebviewPlugin>> webviewPlugins;
 
+static gboolean run_on_main_thread(gpointer data) {
+  auto *task = static_cast<std::function<void()> *>(data);
+  (*task)();
+  delete task;
+  return G_SOURCE_REMOVE;
+}
+
+static void invoke_on_main_thread(std::function<void()> task) {
+  g_main_context_invoke(g_main_context_default(), run_on_main_thread,
+                        new std::function<void()>(std::move(task)));
+}
+
+#ifdef WEBVIEW_CEF_GPU_TEXTURE
+static guint begin_frame_source_id = 0;
+
+static gboolean tick_begin_frame(gpointer) {
+  for (const auto &entry : webviewPlugins) {
+    if (entry.second) {
+      entry.second->tickBeginFrame();
+    }
+  }
+  return G_SOURCE_CONTINUE;
+}
+
+static void start_begin_frame_timer() {
+#ifdef WEBVIEW_CEF_GPU_TEXTURE
+  if (begin_frame_source_id == 0) {
+    begin_frame_source_id = g_timeout_add_full(
+        G_PRIORITY_DEFAULT, 16, tick_begin_frame, nullptr, nullptr);
+  }
+#endif
+}
+
+static void stop_begin_frame_timer() {
+  if (begin_frame_source_id != 0) {
+    g_source_remove(begin_frame_source_id);
+    begin_frame_source_id = 0;
+  }
+}
+#else
+static void start_begin_frame_timer() {}
+static void stop_begin_frame_timer() {}
+#endif
+
 class WebviewTextureRenderer : public webview_cef::WebviewTexture
 {
 public:
@@ -43,16 +87,58 @@ public:
     register_ = nullptr;
   }
 
-  virtual void onFrame(const void *buffer, int32_t width, int32_t height) override
+#ifndef WEBVIEW_CEF_GPU_TEXTURE
+  void onFrame(const void *buffer, int32_t width, int32_t height) override
   {
+    std::lock_guard<std::mutex> lock(*texture->mutex);
     texture->width = width;
     texture->height = height;
-    const auto size = width * height * 4;
-    delete texture->buffer;
+    const size_t size = static_cast<size_t>(width) * height * 4;
+    delete[] texture->buffer;
     texture->buffer = new uint8_t[size];
-    webview_cef::SwapBufferFromBgraToRgba((void *)texture->buffer, buffer, width, height);
+    webview_cef::SwapBufferFromBgraToRgba(texture->buffer, buffer, width, height);
     fl_texture_registrar_mark_texture_frame_available(register_, FL_TEXTURE(texture));
   }
+#else
+  void onAcceleratedFrame(const CefAcceleratedPaintInfo &info,
+                          int32_t width, int32_t height) override
+  {
+    if (info.plane_count != 1 ||
+        info.planes[0].fd < 0 || width <= 0 || height <= 0) {
+      return;
+    }
+
+    const auto &plane = info.planes[0];
+    const size_t required_size = static_cast<size_t>(plane.stride) * height;
+    if (plane.stride < static_cast<uint32_t>(width * 4) || plane.size < required_size) {
+      return;
+    }
+
+    {
+      std::lock_guard<std::mutex> lock(*texture->mutex);
+      for (int index = 0; index < texture->plane_count; ++index) {
+        if (texture->fds[index] >= 0) {
+          close(texture->fds[index]);
+        }
+        texture->fds[index] = -1;
+      }
+      texture->plane_count = 1;
+      texture->fds[0] = fcntl(plane.fd, F_DUPFD_CLOEXEC, 0);
+      if (texture->fds[0] < 0) {
+        texture->plane_count = 0;
+        return;
+      }
+      texture->strides[0] = plane.stride;
+      texture->offsets[0] = plane.offset;
+      texture->modifier = info.modifier;
+      texture->format = info.format;
+      texture->width = width;
+      texture->height = height;
+      ++texture->frame_serial;
+    }
+    fl_texture_registrar_mark_texture_frame_available(register_, FL_TEXTURE(texture));
+  }
+#endif
   FlTextureRegistrar *register_;
   WebviewCefTexture *texture;
 };
@@ -216,16 +302,20 @@ static void webview_cef_plugin_handle_method_call(
   WValue *encodeArgs = encode_flvalue_to_wvalue(fl_method_call_get_args(method_call));
   g_object_ref(method_call);
   self->m_plugin->HandleMethodCall(method, encodeArgs, [=](int ret, WValue *responseArgs){
-    if (ret > 0){
-      fl_method_call_respond_success(method_call, encode_wavlue_to_flvalue(responseArgs), nullptr);
-    }
-    else if (ret < 0){
-      fl_method_call_respond_error(method_call, "error", "error", encode_wavlue_to_flvalue(responseArgs), nullptr);
-    }
-    else{
-      fl_method_call_respond_not_implemented(method_call, nullptr);
-    }
-    g_object_unref(method_call); 
+    FlValue *encoded = responseArgs ? encode_wavlue_to_flvalue(responseArgs) : fl_value_new_null();
+    invoke_on_main_thread([method_call, ret, encoded]() {
+      if (ret > 0){
+        fl_method_call_respond_success(method_call, encoded, nullptr);
+      }
+      else if (ret < 0){
+        fl_method_call_respond_error(method_call, "error", "error", encoded, nullptr);
+      }
+      else{
+        fl_method_call_respond_not_implemented(method_call, nullptr);
+      }
+      fl_value_unref(encoded);
+      g_object_unref(method_call);
+    });
   });
   webview_value_unref(encodeArgs);
 }
@@ -235,6 +325,7 @@ static void webview_cef_plugin_dispose(GObject *object)
   webviewPlugins.erase(WEBVIEW_CEF_PLUGIN(object)->m_window);
   WEBVIEW_CEF_PLUGIN(object)->m_plugin = nullptr; 
   if(webviewPlugins.empty()){
+    stop_begin_frame_timer();
     webview_cef::stopCEF();
   }
   G_OBJECT_CLASS(webview_cef_plugin_parent_class)->dispose(object);
@@ -263,6 +354,7 @@ void webview_cef_plugin_register_with_registrar(FlPluginRegistrar *registrar)
 
   plugin->m_window = int64_t(fl_plugin_registrar_get_view(registrar));
   webviewPlugins.emplace(plugin->m_window, plugin->m_plugin);
+  start_begin_frame_timer();
 
   plugin->m_textureRegister = fl_plugin_registrar_get_texture_registrar(registrar);
 
@@ -277,8 +369,10 @@ void webview_cef_plugin_register_with_registrar(FlPluginRegistrar *registrar)
 
   plugin->m_plugin->setInvokeMethodFunc([=](std::string method, WValue *arguments) {
     FlValue *args = encode_wavlue_to_flvalue(arguments);
-    fl_method_channel_invoke_method(channel, method.c_str(), args, NULL, NULL, NULL);
-    fl_value_unref(args);
+    invoke_on_main_thread([channel, method, args]() {
+      fl_method_channel_invoke_method(channel, method.c_str(), args, NULL, NULL, NULL);
+      fl_value_unref(args);
+    });
   });
 
   plugin->m_plugin->setCreateTextureFunc([=](){

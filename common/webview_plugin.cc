@@ -56,6 +56,14 @@ namespace webview_cef {
 					m_renderers[browserId]->onAcceleratedFrame(sharedHandle, width, height, format);
 				}
 			};
+#if defined(OS_LINUX)
+			m_handler->onAcceleratedPaintInfoCallback = [=, this](int browserId, const CefAcceleratedPaintInfo& info, int32_t width, int32_t height) {
+				auto it = m_renderers.find(browserId);
+				if (it != m_renderers.end() && it->second) {
+					it->second->onAcceleratedFrame(info, width, height);
+				}
+			};
+#endif
 
 			m_handler->onTooltipEvent = [=, this](int browserId, std::string text) {
 				if (m_invokeFunc) {
@@ -252,6 +260,9 @@ namespace webview_cef {
 	void WebviewPlugin::uninitCallback(){
 		m_handler->onPaintCallback = nullptr;
 		m_handler->onAcceleratedPaintCallback = nullptr;
+#if defined(OS_LINUX)
+		m_handler->onAcceleratedPaintInfoCallback = nullptr;
+#endif
 		m_handler->onTooltipEvent = nullptr;
 		m_handler->onCursorChangedEvent = nullptr;
 		m_handler->onConsoleMessageEvent = nullptr;
@@ -696,6 +707,9 @@ namespace webview_cef {
 
 	void startCEF()
 	{
+		if (isCefInitialized) {
+			return;
+		}
 		CefSettings cefs;
 		cefs.windowless_rendering_enabled = true;
 		cefs.no_sandbox = true;
@@ -722,7 +736,9 @@ namespace webview_cef {
 		//cef message run in another thread on windows/linux
 		cefs.multi_threaded_message_loop = true;
 #endif
-		CefInitialize(mainArgs, cefs, app.get(), nullptr);
+		isCefInitialized = CefInitialize(mainArgs, cefs, app.get(), nullptr);
+		std::cerr << "[webview_cef] CefInitialize: "
+		          << (isCefInitialized ? "success" : "failed") << std::endl;
 	}
 
 	void doMessageLoopWork(){
@@ -747,6 +763,11 @@ namespace webview_cef {
 
     void stopCEF()
     {
+		if (!isCefInitialized) {
+			return;
+		}
 		CefShutdown();
+		isCefInitialized = false;
+		std::cerr << "[webview_cef] CefShutdown: complete" << std::endl;
     }
 }

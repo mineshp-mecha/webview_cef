@@ -14,6 +14,11 @@ namespace webview_cef {
         virtual void onFrame(const void* buffer, int width, int height){}
         // GPU accelerated frame (shared texture handle from OnAcceleratedPaint).
         virtual void onAcceleratedFrame(const void* sharedHandle, int width, int height, int format){}
+    #if defined(OS_LINUX)
+        // Linux accelerated frames expose DMA-BUF plane metadata instead of a
+        // single shared handle. The data is valid only during the callback.
+        virtual void onAcceleratedFrame(const CefAcceleratedPaintInfo& info, int width, int height){}
+    #endif
         int64_t textureId = 0;
         bool isFocused = false;
         // IME state for THIS browser (a single plugin can host several). The

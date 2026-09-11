@@ -4,6 +4,8 @@
 
 #include "webview_app.h"
 
+#include <cstdlib>
+#include <iostream>
 #include <string>
 
 #include "include/cef_browser.h"
@@ -113,7 +115,8 @@ void WebviewApp::OnBeforeCommandLineProcessing(const CefString &process_type, Ce
 		}
 #endif
 
-		command_line->AppendSwitch("disable-web-security");                                     //disable web security
+        command_line->AppendSwitchWithValue("use-angle", "gl-egl");
+        command_line->AppendSwitch("disable-web-security");                                     //disable web security
 		command_line->AppendSwitch("allow-running-insecure-content");                           //allow running insecure content in secure pages
 		// Don't create a "GPUCache" directory when cache-path is unspecified.
 		command_line->AppendSwitch("disable-gpu-shader-disk-cache");                            //disable gpu shader disk cache
@@ -167,7 +170,14 @@ void WebviewApp::OnBeforeCommandLineProcessing(const CefString &process_type, Ce
     // selected by m_uMode above, like the other platforms.
 #endif
 #ifdef __linux__
-                                           
+        const char* ozone_platform = std::getenv("WEBVIEW_CEF_OZONE_PLATFORM");
+        if (ozone_platform == nullptr || ozone_platform[0] == '\0') {
+            ozone_platform = std::getenv("WAYLAND_DISPLAY") != nullptr ? "wayland" : "x11";
+        }
+        command_line->AppendSwitchWithValue("ozone-platform", ozone_platform);
+        command_line->AppendSwitchWithValue("ozone-platform-hint", "auto");
+        std::cerr << "[webview_cef] GPU runtime: ozone-platform="
+                  << ozone_platform << ", use-angle=gl-egl" << std::endl;
 #endif
 }
 

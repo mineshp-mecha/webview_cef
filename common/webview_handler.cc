@@ -287,7 +287,7 @@ void WebviewHandler::createBrowser(std::string url, std::function<void(int)> cal
     // OnPaint fallback). If no accelerated frame arrives shortly, the GPU
     // compositor likely can't export a shared texture — warn so a black webview
     // isn't silent.
-    CefPostDelayedTask(TID_UI, base::BindOnce(&WebviewHandler::warnIfNoAcceleratedFrame, this), 5000);
+    CefPostDelayedTask(TID_UI, base::BindOnce(&WebviewHandler::warnIfNoAcceleratedFrame, this), 15000);
 #endif
 }
 
@@ -296,7 +296,7 @@ void WebviewHandler::warnIfNoAcceleratedFrame() {
     if (!received_accelerated_frame_ && !gpu_warning_logged_) {
         gpu_warning_logged_ = true;
         fprintf(stderr,
-                "[webview_cef] WARNING: no GPU accelerated-paint frame after 5s. "
+            "[webview_cef] WARNING: no GPU accelerated-paint frame after 15s. "
                 "This build renders the webview only via the GPU shared-texture "
                 "path; if it appears black, the GPU compositor may be unavailable "
                 "(headless, VM, software GL, or a crashed GPU process).\n");
@@ -757,6 +757,11 @@ bool WebviewHandler::GetScreenInfo(CefRefPtr<CefBrowser> browser, CefScreenInfo&
 
 void WebviewHandler::OnPaint(CefRefPtr<CefBrowser> browser, CefRenderHandler::PaintElementType type,
                             const CefRenderHandler::RectList &dirtyRects, const void *buffer, int w, int h) {
+#ifdef WEBVIEW_CEF_GPU_TEXTURE
+    fprintf(stderr,
+            "[webview_cef] WARNING: no GPU accelerated-paint frame. \n");
+    fflush(stderr);
+#endif
     if (!browser->IsPopup() && onPaintCallback != nullptr) {
         onPaintCallback(browser->GetIdentifier(), buffer, w, h);
     }
@@ -765,6 +770,21 @@ void WebviewHandler::OnPaint(CefRefPtr<CefBrowser> browser, CefRenderHandler::Pa
 void WebviewHandler::OnAcceleratedPaint(CefRefPtr<CefBrowser> browser, CefRenderHandler::PaintElementType type,
                             const CefRenderHandler::RectList &dirtyRects, const CefAcceleratedPaintInfo &info) {
 #ifdef WEBVIEW_CEF_GPU_TEXTURE
+    ++accelerated_frame_count_;
+    if (accelerated_frame_count_ <= 3 || accelerated_frame_count_ % 120 == 0) {
+        fprintf(stderr, "[webview_cef] GPU accelerated-paint frame #%llu (format=%d)\n",
+        static_cast<unsigned long long>(accelerated_frame_count_),
+        static_cast<int>(info.format));
+#if defined(OS_LINUX)
+        fprintf(stderr, "[webview_cef] DMA-BUF %dx%d planes=%d fd=%d stride=%u offset=%llu size=%llu\n",
+            info.extra.coded_size.width, info.extra.coded_size.height,
+        info.plane_count, info.plane_count > 0 ? info.planes[0].fd : -1,
+        info.plane_count > 0 ? info.planes[0].stride : 0,
+        static_cast<unsigned long long>(info.plane_count > 0 ? info.planes[0].offset : 0),
+        static_cast<unsigned long long>(info.plane_count > 0 ? info.planes[0].size : 0));
+#endif
+    fflush(stderr);
+    }
     if (!browser->IsPopup() && onAcceleratedPaintCallback != nullptr) {
         received_accelerated_frame_ = true;
         int w = 0, h = 0;
@@ -788,11 +808,18 @@ void WebviewHandler::OnAcceleratedPaint(CefRefPtr<CefBrowser> browser, CefRender
         // The platform renderer wraps/copies it before returning.
 #ifdef __APPLE__
         const void* sharedTexture = reinterpret_cast<const void*>(info.shared_texture_io_surface);
+#elif defined(OS_LINUX)
+    const void* sharedTexture = nullptr;
 #else
         const void* sharedTexture = reinterpret_cast<const void*>(info.shared_texture_handle);
 #endif
         onAcceleratedPaintCallback(browser->GetIdentifier(), sharedTexture,
                                    w, h, static_cast<int>(info.format));
+#if defined(OS_LINUX)
+        if (onAcceleratedPaintInfoCallback != nullptr) {
+            onAcceleratedPaintInfoCallback(browser->GetIdentifier(), info, w, h);
+        }
+#endif
     }
 #endif
 }
