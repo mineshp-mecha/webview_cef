@@ -16,7 +16,6 @@ namespace webview_cef {
 	CefMainArgs mainArgs;
 	CefRefPtr<WebviewApp> app;
 	CefString userAgent;
-	bool isCefInitialized = false;
 
     static WebviewPlugin* g_plugin_for_ffi = nullptr;
 #ifdef OS_MAC
@@ -914,10 +913,6 @@ namespace webview_cef {
 
 	void startCEF()
 	{
-		if (isCefInitialized)
-		{
-			return;
-		}
 		CefSettings cefs;
 		cefs.windowless_rendering_enabled = true;
 		cefs.no_sandbox = true;
@@ -947,10 +942,7 @@ namespace webview_cef {
 		//cef message run in another thread on windows/linux
 		cefs.multi_threaded_message_loop = true;
 #endif
-		// CefInitialize(mainArgs, cefs, app.get(), nullptr);
-		isCefInitialized = CefInitialize(mainArgs, cefs, app.get(), nullptr);
-		std::cerr << "[webview_cef] CefInitialize: "
-				  << (isCefInitialized ? "success" : "failed") << std::endl;
+		CefInitialize(mainArgs, cefs, app.get(), nullptr);
 	}
 
 	void doMessageLoopWork(){
@@ -975,12 +967,7 @@ namespace webview_cef {
 
     void stopCEF()
     {
-		if (!isCefInitialized)
-		{
-			return;
-		}
 		CefShutdown();
-		isCefInitialized = false;
 		std::cerr << "[webview_cef] CefShutdown: complete" << std::endl;
 	}
 }

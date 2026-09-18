@@ -1024,29 +1024,12 @@ void WebviewHandler::OnAcceleratedPaint(CefRefPtr<CefBrowser> browser, CefRender
                                         const CefRenderHandler::RectList &dirtyRects, const CefAcceleratedPaintInfo &info)
 {
 #ifdef WEBVIEW_CEF_GPU_TEXTURE
-    ++accelerated_frame_count_;
-    if (accelerated_frame_count_ <= 3 || accelerated_frame_count_ % 120 == 0)
-    {
-        fprintf(stderr, "[webview_cef] GPU accelerated-paint frame #%llu (format=%d)\n",
-                static_cast<unsigned long long>(accelerated_frame_count_),
-                static_cast<int>(info.format));
-#if defined(OS_LINUX)
-        fprintf(stderr, "[webview_cef] DMA-BUF %dx%d planes=%d fd=%d stride=%u offset=%llu size=%llu\n",
-                info.extra.coded_size.width, info.extra.coded_size.height,
-                info.plane_count, info.plane_count > 0 ? info.planes[0].fd : -1,
-                info.plane_count > 0 ? info.planes[0].stride : 0,
-                static_cast<unsigned long long>(info.plane_count > 0 ? info.planes[0].offset : 0),
-                static_cast<unsigned long long>(info.plane_count > 0 ? info.planes[0].size : 0));
-#endif
-        fflush(stderr);
-    }
     if (!browser->IsPopup() && onAcceleratedPaintCallback != nullptr)
     {
         received_accelerated_frame_ = true;
         int w = 0, h = 0;
         auto it = browser_map_.find(browser->GetIdentifier());
-        if (it != browser_map_.end())
-        {
+        if (it != browser_map_.end()) {
             w = it->second.width;
             h = it->second.height;
             // A produced frame means the browser is render/input-ready. With
@@ -1054,8 +1037,7 @@ void WebviewHandler::OnAcceleratedPaint(CefRefPtr<CefBrowser> browser, CefRender
             // dropped (the browser wasn't ready yet), which left the webview
             // unable to receive keyboard input until the window was re-focused.
             // Re-apply the requested focus once, now that frames are flowing.
-            if (it->second.wants_focus && !it->second.focus_reasserted)
-            {
+            if (it->second.wants_focus && !it->second.focus_reasserted) {
                 it->second.focus_reasserted = true;
                 it->second.browser->GetHost()->SetFocus(true);
             }
