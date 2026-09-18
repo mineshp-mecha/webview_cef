@@ -58,6 +58,9 @@ public:
     //is the OnAcceleratedPaint shared-texture HANDLE; |format| is a
     //cef_color_type_t. Only fired when shared textures are enabled.
     std::function<void(int browserId, const void* sharedHandle, int32_t width, int32_t height, int32_t format)> onAcceleratedPaintCallback;
+#if defined(OS_LINUX)
+    std::function<void(int browserId, const CefAcceleratedPaintInfo &info, int32_t width, int32_t height)> onAcceleratedPaintInfoCallback;
+#endif
     //cef message event
     std::function<void(int browserId, std::string url)> onUrlChangedEvent;
     std::function<void(int browserId, std::string title)> onTitleChangedEvent;
@@ -249,6 +252,7 @@ private:
     // Only declared on GPU builds so non-GPU builds don't see unused fields.
     bool received_accelerated_frame_ = false;
     bool gpu_warning_logged_ = false;
+    uint64_t accelerated_frame_count_ = 0;
 #endif
 
     // Include the default reference counting implementation.

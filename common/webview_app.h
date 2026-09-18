@@ -75,7 +75,7 @@ public:
         CefRefPtr<CefProcessMessage> message) override;
     
 private:
-    uint32_t                        m_uMode = 2;                        //process mode
+    uint32_t                        m_uMode = 1;                        //process mode
     bool                            m_bEnableGPU = true;               //enable gpu
     CefString                       m_strFilterDomain;                  //insecure domain whitelist       
 

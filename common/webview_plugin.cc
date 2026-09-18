@@ -51,19 +51,29 @@ namespace webview_cef {
 	void WebviewPlugin::initCallback() {
 		if (!m_init)
 		{
-			m_handler->onPaintCallback = [=](int browserId, const void* buffer, int32_t width, int32_t height) {
+			m_handler->onPaintCallback = [=, this](int browserId, const void* buffer, int32_t width, int32_t height) {
 				if (m_renderers.find(browserId) != m_renderers.end() && m_renderers[browserId] != nullptr) {
 					m_renderers[browserId]->onFrame(buffer, width, height);
 				}
 			};
 
-			m_handler->onAcceleratedPaintCallback = [=](int browserId, const void* sharedHandle, int32_t width, int32_t height, int32_t format) {
+			m_handler->onAcceleratedPaintCallback = [=, this](int browserId, const void* sharedHandle, int32_t width, int32_t height, int32_t format) {
 				if (m_renderers.find(browserId) != m_renderers.end() && m_renderers[browserId] != nullptr) {
 					m_renderers[browserId]->onAcceleratedFrame(sharedHandle, width, height, format);
 				}
 			};
+#if defined(OS_LINUX)
+			m_handler->onAcceleratedPaintInfoCallback = [=, this](int browserId, const CefAcceleratedPaintInfo &info, int32_t width, int32_t height)
+			{
+				auto it = m_renderers.find(browserId);
+				if (it != m_renderers.end() && it->second)
+				{
+					it->second->onAcceleratedFrame(info, width, height);
+				}
+			};
+#endif
 
-			m_handler->onTooltipEvent = [=](int browserId, std::string text) {
+			m_handler->onTooltipEvent = [=, this](int browserId, std::string text) {
 				if (m_invokeFunc) {
 					WValue* bId = webview_value_new_int(browserId);
 					WValue* wText = webview_value_new_string(const_cast<char*>(text.c_str()));
@@ -77,7 +87,7 @@ namespace webview_cef {
 				}
 			};
 
-			m_handler->onCursorChangedEvent = [=](int browserId, int type) {
+			m_handler->onCursorChangedEvent = [=, this](int browserId, int type) {
 				if(m_invokeFunc){
 					WValue* bId = webview_value_new_int(browserId);
 					WValue* wType = webview_value_new_int(type);
@@ -91,7 +101,7 @@ namespace webview_cef {
 				}
 			};
 
-			m_handler->onConsoleMessageEvent = [=](int browserId, int level, std::string message, std::string source, int line){
+			m_handler->onConsoleMessageEvent = [=, this](int browserId, int level, std::string message, std::string source, int line){
 				if(m_invokeFunc){
 					WValue* bId = webview_value_new_int(browserId);
 					WValue* wLevel = webview_value_new_int(level);
@@ -114,7 +124,7 @@ namespace webview_cef {
 				}
 			};
 
-			m_handler->onUrlChangedEvent = [=](int browserId, std::string url)
+			m_handler->onUrlChangedEvent = [=, this](int browserId, std::string url)
 			{
 				if (m_invokeFunc)
 				{
@@ -130,7 +140,7 @@ namespace webview_cef {
 				}
 			};
 
-			m_handler->onTitleChangedEvent = [=](int browserId, std::string title)
+			m_handler->onTitleChangedEvent = [=, this](int browserId, std::string title)
 			{
 				if (m_invokeFunc)
 				{
@@ -146,7 +156,7 @@ namespace webview_cef {
 				}
 			};
 
-			m_handler->onJavaScriptChannelMessage = [=](std::string channelName, std::string message, std::string callbackId, int browserId, std::string frameId)
+			m_handler->onJavaScriptChannelMessage = [=, this](std::string channelName, std::string message, std::string callbackId, int browserId, std::string frameId)
 			{
 				if (m_invokeFunc)
 				{
@@ -171,7 +181,7 @@ namespace webview_cef {
 				}
 			};
 
-			m_handler->onFocusedNodeChangeMessage = [=](int nBrowserId, bool bEditable)
+			m_handler->onFocusedNodeChangeMessage = [=, this](int nBrowserId, bool bEditable)
 			{
 				// Track editable focus per browser so the platform layer can route
 				// raw character keys to the OS IME while a web input is focused
@@ -196,7 +206,7 @@ namespace webview_cef {
 				}
 			};
 
-			m_handler->onImeCompositionRangeChangedMessage = [=](int nBrowserId, int32_t x, int32_t y, int32_t height)
+			m_handler->onImeCompositionRangeChangedMessage = [=, this](int nBrowserId, int32_t x, int32_t y, int32_t height)
 			{
 				if (m_invokeFunc)
 				{
@@ -219,7 +229,7 @@ namespace webview_cef {
 			};
 
 
-            m_handler->onLoadStart = [=](int nBrowserId, std::string urlId)
+            m_handler->onLoadStart = [=, this](int nBrowserId, std::string urlId)
             {
                 if (m_invokeFunc)
                 {
@@ -235,7 +245,7 @@ namespace webview_cef {
                 }
             };
 
-            m_handler->onLoadEnd = [=](int nBrowserId, std::string urlId)
+            m_handler->onLoadEnd = [=, this](int nBrowserId, std::string urlId)
             {
                 if (m_invokeFunc)
                 {
@@ -251,7 +261,7 @@ namespace webview_cef {
                 }
             };
 
-            m_handler->onLoadErrorEvent = [=](int nBrowserId, int errorCode, std::string errorText, std::string failedUrl, bool isMainFrame)
+            m_handler->onLoadErrorEvent = [=, this](int nBrowserId, int errorCode, std::string errorText, std::string failedUrl, bool isMainFrame)
             {
                 if (m_invokeFunc)
                 {
@@ -276,7 +286,7 @@ namespace webview_cef {
                 }
             };
 
-            m_handler->onBeforeDownloadEvent = [=](int nBrowserId, uint32_t downloadId, std::string url, std::string suggestedName, std::string contentDisposition, std::string mimeType, int64_t totalBytes)
+            m_handler->onBeforeDownloadEvent = [=, this](int nBrowserId, uint32_t downloadId, std::string url, std::string suggestedName, std::string contentDisposition, std::string mimeType, int64_t totalBytes)
             {
                 if (m_invokeFunc)
                 {
@@ -307,7 +317,7 @@ namespace webview_cef {
                 }
             };
 
-            m_handler->onDownloadUpdatedEvent = [=](int nBrowserId, uint32_t downloadId, std::string url, std::string fullPath, int64_t receivedBytes, int64_t totalBytes, int64_t currentSpeed, int percentComplete, bool isInProgress, bool isComplete, bool isCanceled, bool isInterrupted, int interruptReason)
+            m_handler->onDownloadUpdatedEvent = [=, this](int nBrowserId, uint32_t downloadId, std::string url, std::string fullPath, int64_t receivedBytes, int64_t totalBytes, int64_t currentSpeed, int percentComplete, bool isInProgress, bool isComplete, bool isCanceled, bool isInterrupted, int interruptReason)
             {
                 if (m_invokeFunc)
                 {
@@ -366,6 +376,9 @@ namespace webview_cef {
 	void WebviewPlugin::uninitCallback(){
 		m_handler->onPaintCallback = nullptr;
 		m_handler->onAcceleratedPaintCallback = nullptr;
+#if defined(OS_LINUX)
+		m_handler->onAcceleratedPaintInfoCallback = nullptr;
+#endif
 		m_handler->onTooltipEvent = nullptr;
 		m_handler->onCursorChangedEvent = nullptr;
 		m_handler->onConsoleMessageEvent = nullptr;
@@ -406,7 +419,7 @@ namespace webview_cef {
 			std::string url = webview_value_get_string(url_val);
 			bool isPrivate = webview_value_get_bool(private_val);
 
-			m_handler->createBrowser(url, isPrivate, [=](int browserId) {
+			m_handler->createBrowser(url, isPrivate, [=, this](int browserId) {
 				std::shared_ptr<WebviewTexture> renderer = m_createTextureFunc();
 				m_renderers[browserId] = renderer;
 				WValue	*response = webview_value_new_list();
@@ -901,6 +914,10 @@ namespace webview_cef {
 
 	void startCEF()
 	{
+		if (isCefInitialized)
+		{
+			return;
+		}
 		CefSettings cefs;
 		cefs.windowless_rendering_enabled = true;
 		cefs.no_sandbox = true;
@@ -930,7 +947,10 @@ namespace webview_cef {
 		//cef message run in another thread on windows/linux
 		cefs.multi_threaded_message_loop = true;
 #endif
-		CefInitialize(mainArgs, cefs, app.get(), nullptr);
+		// CefInitialize(mainArgs, cefs, app.get(), nullptr);
+		isCefInitialized = CefInitialize(mainArgs, cefs, app.get(), nullptr);
+		std::cerr << "[webview_cef] CefInitialize: "
+				  << (isCefInitialized ? "success" : "failed") << std::endl;
 	}
 
 	void doMessageLoopWork(){
@@ -955,8 +975,14 @@ namespace webview_cef {
 
     void stopCEF()
     {
+		if (!isCefInitialized)
+		{
+			return;
+		}
 		CefShutdown();
-    }
+		isCefInitialized = false;
+		std::cerr << "[webview_cef] CefShutdown: complete" << std::endl;
+	}
 }
 
 extern "C" {

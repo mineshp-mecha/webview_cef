@@ -7,15 +7,67 @@
 #include <flutter/standard_method_codec.h>
 #include <flutter/texture_registrar.h>
 
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <cstring>
+#include <fcntl.h>
 #include <memory>
+#include <mutex>
+#include <thread>
 #include <unordered_map>
 
 #include <webview_plugin.h>
 #include "webview_cef_texture.h"
 
 std::unordered_map<int64_t, std::shared_ptr<webview_cef::WebviewPlugin>> webviewPlugins;
+#ifdef WEBVIEW_CEF_GPU_TEXTURE
+static std::atomic<bool> g_frame_timer_running{false};
+static std::unique_ptr<std::thread> g_frame_timer_thread;
+static std::mutex g_frame_timer_mutex;
+static std::condition_variable g_frame_timer_cv;
 
+static void start_begin_frame_timer()
+{
+  if (g_frame_timer_running.exchange(true))
+  {
+    return;
+  }
+  g_frame_timer_thread = std::make_unique<std::thread>([]()
+                                                       {
+    while (g_frame_timer_running.load()) {
+      {
+        std::unique_lock<std::mutex> lock(g_frame_timer_mutex);
+        if (g_frame_timer_cv.wait_for(lock, std::chrono::milliseconds(16),
+                                      [] { return !g_frame_timer_running.load(); })) {
+          break;
+        }
+      }
+      for (const auto& entry : webviewPlugins) {
+        if (entry.second) {
+          entry.second->tickBeginFrame();
+        }
+      }
+    } });
+}
+
+static void stop_begin_frame_timer()
+{
+  if (!g_frame_timer_running.exchange(false))
+  {
+    return;
+  }
+  g_frame_timer_cv.notify_all();
+  if (g_frame_timer_thread && g_frame_timer_thread->joinable())
+  {
+    g_frame_timer_thread->join();
+    g_frame_timer_thread.reset();
+  }
+}
+#else
+static void start_begin_frame_timer() {}
+static void stop_begin_frame_timer() {}
+#endif
 class WebviewTextureRenderer : public webview_cef::WebviewTexture {
  public:
   WebviewTextureRenderer(flutter::TextureRegistrar* registrar)
@@ -30,6 +82,7 @@ class WebviewTextureRenderer : public webview_cef::WebviewTexture {
     registrar_->UnregisterTexture(texture_->textureId);
   }
 
+#ifndef WEBVIEW_CEF_GPU_TEXTURE
   void onFrame(const void* buffer, int32_t width, int32_t height) override {
     std::lock_guard<std::mutex> lock(texture_->mutex);
     if (texture_->width != (uint32_t)width ||
@@ -43,8 +96,50 @@ class WebviewTextureRenderer : public webview_cef::WebviewTexture {
         (void*)texture_->buffer, buffer, width, height);
     registrar_->MarkTextureFrameAvailable(texture_->textureId);
   }
+#else
+  void onAcceleratedFrame(const CefAcceleratedPaintInfo &info,
+                          int32_t width, int32_t height) override
+  {
+    if (info.plane_count != 1 || info.planes[0].fd < 0 || width <= 0 ||
+        height <= 0)
+    {
+      return;
+    }
+    const auto &plane = info.planes[0];
+    const size_t required_size = static_cast<size_t>(plane.stride) * height;
+    if (plane.stride < static_cast<uint32_t>(width * 4) ||
+        plane.size < required_size)
+    {
+      return;
+    }
 
- private:
+    std::lock_guard<std::mutex> lock(texture_->mutex);
+    for (int index = 0; index < texture_->plane_count; ++index)
+    {
+      if (texture_->fds[index] >= 0)
+      {
+        texture_->retired_fds.push_back(texture_->fds[index]);
+        texture_->fds[index] = -1;
+      }
+    }
+    texture_->plane_count = 1;
+    texture_->fds[0] = fcntl(plane.fd, F_DUPFD_CLOEXEC, 0);
+    if (texture_->fds[0] < 0)
+    {
+      texture_->plane_count = 0;
+      return;
+    }
+    texture_->strides[0] = plane.stride;
+    texture_->offsets[0] = plane.offset;
+    texture_->modifier = info.modifier;
+    texture_->format = info.format;
+    texture_->width = width;
+    texture_->height = height;
+    ++texture_->frame_serial;
+    registrar_->MarkTextureFrameAvailable(texture_->textureId);
+  }
+#endif
+private:
   flutter::TextureRegistrar* registrar_;
   std::unique_ptr<WebviewCefTexture> texture_;
 };
@@ -166,6 +261,7 @@ class WebviewCefPlugin : public flutter::Plugin {
     webviewPlugins.erase(window_id_);
     plugin_ = nullptr;
     if (webviewPlugins.empty()) {
+      stop_begin_frame_timer();
       webview_cef::stopCEF();
     }
   }
@@ -173,6 +269,7 @@ class WebviewCefPlugin : public flutter::Plugin {
   void SetWindowId(int64_t id) {
     window_id_ = id;
     webviewPlugins.emplace(id, plugin_);
+    start_begin_frame_timer();
   }
 
  private:
