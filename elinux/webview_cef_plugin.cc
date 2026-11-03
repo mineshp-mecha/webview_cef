@@ -8,6 +8,7 @@
 #include <flutter/texture_registrar.h>
 
 #include <atomic>
+#include <algorithm>
 #include <chrono>
 #include <condition_variable>
 #include <cstring>
@@ -52,6 +53,7 @@ class WebviewTextureRenderer : public webview_cef::WebviewTexture {
   }
 #else
   void onAcceleratedFrame(const CefAcceleratedPaintInfo &info,
+                          const CefRenderHandler::RectList &dirtyRects,
                           int32_t width, int32_t height) override
   {
     if (info.plane_count != 1 || info.planes[0].fd < 0 || width <= 0 ||
@@ -90,7 +92,42 @@ class WebviewTextureRenderer : public webview_cef::WebviewTexture {
     texture_->width = width;
     texture_->height = height;
     ++texture_->frame_serial;
-    registrar_->MarkTextureFrameAvailable(texture_->textureId);
+
+    std::vector<FlutterDesktopRect> damage_rects;
+    damage_rects.reserve(dirtyRects.size());
+    for (const auto& r : dirtyRects) {
+      const double left = std::max(0.0, static_cast<double>(r.x));
+      const double top = std::max(0.0, static_cast<double>(r.y));
+      const double right =
+          std::min(static_cast<double>(width),
+                   static_cast<double>(r.x) + static_cast<double>(r.width));
+      const double bottom =
+          std::min(static_cast<double>(height),
+                   static_cast<double>(r.y) + static_cast<double>(r.height));
+      if (right <= left || bottom <= top) {
+        continue;
+      }
+      damage_rects.push_back(FlutterDesktopRect{
+          left,
+          top,
+          right,
+          bottom,
+      });
+    }
+
+    if (!damage_rects.empty()) {
+      registrar_->MarkTextureFrameAvailableWithDamage(
+          texture_->textureId, damage_rects.size(), damage_rects.data());
+    } else {
+      registrar_->MarkTextureFrameAvailable(texture_->textureId);
+    }
+  }
+
+  void onAcceleratedFrame(const CefAcceleratedPaintInfo &info,
+                          int32_t width, int32_t height) override
+  {
+    CefRenderHandler::RectList emptyList;
+    onAcceleratedFrame(info, emptyList, width, height);
   }
 #endif
 private:

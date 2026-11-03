@@ -63,12 +63,12 @@ namespace webview_cef {
 				}
 			};
 #if defined(OS_LINUX)
-			m_handler->onAcceleratedPaintInfoCallback = [=, this](int browserId, const CefAcceleratedPaintInfo &info, int32_t width, int32_t height)
+			m_handler->onAcceleratedPaintInfoCallback = [=, this](int browserId, const CefAcceleratedPaintInfo &info, const CefRenderHandler::RectList &dirtyRects, int32_t width, int32_t height)
 			{
 				auto it = m_renderers.find(browserId);
 				if (it != m_renderers.end() && it->second)
 				{
-					it->second->onAcceleratedFrame(info, width, height);
+					it->second->onAcceleratedFrame(info, dirtyRects, width, height);
 				}
 			};
 #endif
@@ -916,9 +916,6 @@ namespace webview_cef {
 		int browserId = int(webview_value_get_int(webview_value_get_list_value(args, 0)));
 		int x = int(webview_value_get_int(webview_value_get_list_value(args, 1)));
 		int y = int(webview_value_get_int(webview_value_get_list_value(args, 2)));
-		if (!x && !y) {
-			return 0;
-		}
 		if (name.compare("cursorClickDown") == 0) {
 			m_handler->cursorClick(browserId, x, y, false);
 		}
