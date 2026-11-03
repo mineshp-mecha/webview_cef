@@ -71,7 +71,23 @@ namespace webview_cef {
 					it->second->onAcceleratedFrame(info, dirtyRects, width, height);
 				}
 			};
+			m_handler->onAcceleratedPopupPaintCallback = [=, this](int browserId, const CefAcceleratedPaintInfo &info, const CefRenderHandler::RectList &dirtyRects, int32_t width, int32_t height)
+			{
+				auto it = m_renderers.find(browserId);
+				if (it != m_renderers.end() && it->second)
+				{
+					it->second->onAcceleratedPopupFrame(info, dirtyRects, width, height);
+				}
+			};
 #endif
+			m_handler->onPopupChanged = [=, this](int browserId, bool visible, const CefRect &rect)
+			{
+				auto it = m_renderers.find(browserId);
+				if (it != m_renderers.end() && it->second)
+				{
+					it->second->onPopupChanged(visible, rect);
+				}
+			};
 
 			m_handler->onTooltipEvent = [=, this](int browserId, std::string text) {
 				if (m_invokeFunc) {
@@ -421,7 +437,9 @@ namespace webview_cef {
 		m_handler->onAcceleratedPaintCallback = nullptr;
 #if defined(OS_LINUX)
 		m_handler->onAcceleratedPaintInfoCallback = nullptr;
+		m_handler->onAcceleratedPopupPaintCallback = nullptr;
 #endif
+		m_handler->onPopupChanged = nullptr;
 		m_handler->onTooltipEvent = nullptr;
 		m_handler->onCursorChangedEvent = nullptr;
 		m_handler->onConsoleMessageEvent = nullptr;

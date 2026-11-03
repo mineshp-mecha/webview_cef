@@ -19,7 +19,13 @@ namespace webview_cef {
         // single shared handle. The data is valid only during the callback.
         virtual void onAcceleratedFrame(const CefAcceleratedPaintInfo &info, const CefRenderHandler::RectList &dirtyRects, int width, int height) {}
         virtual void onAcceleratedFrame(const CefAcceleratedPaintInfo &info, int width, int height) {}
+        // The browser's popup widget (e.g. an open <select> list): its frames,
+        // sized |width| x |height| pixels, belong over the view at the rect
+        // last given to onPopupChanged.
+        virtual void onAcceleratedPopupFrame(const CefAcceleratedPaintInfo &info, const CefRenderHandler::RectList &dirtyRects, int width, int height) {}
 #endif
+        // Popup shown or moved (|rect| in view DIP), or hidden.
+        virtual void onPopupChanged(bool visible, const CefRect &rect) {}
         int64_t textureId = 0;
         bool isFocused = false;
         // IME state for THIS browser (a single plugin can host several). The

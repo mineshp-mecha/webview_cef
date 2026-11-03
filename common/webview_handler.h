@@ -45,6 +45,10 @@ struct browser_info{
     bool capture_requested = false;
     // Pending touch-selection quick menu; run by quickMenuAction().
     CefRefPtr<CefRunQuickMenuCallback> quick_menu_callback;
+    // The <select>-style popup widget, which windowless CEF paints separately
+    // (PET_POPUP) for the host to draw over the view. View coordinates (DIP).
+    bool popup_visible = false;
+    CefRect popup_rect;
 };
 
 class WebviewHandler : public CefClient,
@@ -64,7 +68,11 @@ public:
     std::function<void(int browserId, const void* sharedHandle, int32_t width, int32_t height, int32_t format)> onAcceleratedPaintCallback;
 #if defined(OS_LINUX)
     std::function<void(int browserId, const CefAcceleratedPaintInfo &info, const CefRenderHandler::RectList &dirtyRects, int32_t width, int32_t height)> onAcceleratedPaintInfoCallback;
+    // PET_POPUP frames; |width|/|height| are the popup's buffer size in pixels.
+    std::function<void(int browserId, const CefAcceleratedPaintInfo &info, const CefRenderHandler::RectList &dirtyRects, int32_t width, int32_t height)> onAcceleratedPopupPaintCallback;
 #endif
+    // Popup shown/moved (|visible| true, |rect| in view DIP) or hidden.
+    std::function<void(int browserId, bool visible, const CefRect &rect)> onPopupChanged;
     //cef message event
     std::function<void(int browserId, std::string url)> onUrlChangedEvent;
     std::function<void(int browserId, std::string title)> onTitleChangedEvent;
@@ -176,6 +184,8 @@ public:
     virtual void OnPaint(CefRefPtr<CefBrowser> browser, PaintElementType type, const RectList& dirtyRects, const void* buffer, int width, int height) override;
     virtual void OnAcceleratedPaint(CefRefPtr<CefBrowser> browser, PaintElementType type, const RectList& dirtyRects, const CefAcceleratedPaintInfo& info) override;
     virtual bool GetScreenInfo(CefRefPtr<CefBrowser> browser, CefScreenInfo& screen_info) override;
+    virtual void OnPopupShow(CefRefPtr<CefBrowser> browser, bool show) override;
+    virtual void OnPopupSize(CefRefPtr<CefBrowser> browser, const CefRect& rect) override;
     virtual bool StartDragging(CefRefPtr<CefBrowser> browser,
                                CefRefPtr<CefDragData> drag_data,
                                DragOperationsMask allowed_ops,

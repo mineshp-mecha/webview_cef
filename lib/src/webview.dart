@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'webview_events_listener.dart';
 import 'webview_javascript.dart';
 import 'webview_manager.dart';
+import 'webview_subsurface.dart';
 import 'webview_textinput.dart';
 import 'webview_tooltip.dart';
 import 'webview_touch_selection.dart';
@@ -54,6 +55,12 @@ class WebViewController extends ValueNotifier<bool> {
   late int _browserId;
   late int _textureId;
   int get textureId => _textureId;
+
+  // Frames go to a native Wayland subsurface below Flutter (eLinux with
+  // WEBVIEW_CEF_SUBSURFACE=1); the widget then paints a hole, not a Texture.
+  bool _subsurface = false;
+  late final SubsurfaceHoleGroup _holeGroup =
+      SubsurfaceHoleGroup(_setSubsurfaceRect);
   final Map<String, JavascriptChannel> _javascriptChannels =
       <String, JavascriptChannel>{};
   Map<String, JavascriptChannel> get javascriptChannels => _javascriptChannels;
@@ -93,6 +100,12 @@ class WebViewController extends ValueNotifier<bool> {
       List args = await _pluginChannel.invokeMethod('create', [url, isPrivate]);
       _browserId = args[0] as int;
       _textureId = args[1] as int;
+      if (Platform.isLinux) {
+        _subsurface = await _pluginChannel
+                .invokeMethod<bool>('subsurfaceEnabled', [_textureId])
+                .catchError((_) => false) ??
+            false;
+      }
       WebviewManager().onBrowserCreated(_index, _browserId);
       await Future.delayed(const Duration(milliseconds: 50));
       _webviewWidget = WebView(this);
@@ -375,6 +388,27 @@ class WebViewController extends ValueNotifier<bool> {
     assert(value);
     return _pluginChannel.invokeMethod('sendTouchEvent',
         [_browserId, type, touchId, position.dx, position.dy, modifiers]);
+  }
+
+  Widget _buildSurface() {
+    if (!_subsurface) {
+      return Texture(textureId: _textureId);
+    }
+    return WebviewSurfaceHole(group: _holeGroup);
+  }
+
+  void _setSubsurfaceRect(Rect rect, bool visible) {
+    if (_isDisposed) {
+      return;
+    }
+    unawaited(_pluginChannel.invokeMethod('setSubsurfaceRect', [
+      _textureId,
+      rect.left,
+      rect.top,
+      rect.width,
+      rect.height,
+      visible,
+    ]));
   }
 
   /// Sets the surface size to the provided [size].
@@ -918,7 +952,7 @@ class WebViewState extends State<WebView> with WebeViewTextInput {
           child: MouseRegion(
             cursor: _mouseType,
             child: Builder(builder: (context) {
-              return Texture(textureId: _controller._textureId);
+              return _controller._buildSurface();
             }),
           ),
         ),
@@ -958,6 +992,17 @@ class WebViewState extends State<WebView> with WebeViewTextInput {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    // The embedder may learn the output scale only after the first frame; the
+    // logical size stays the same then, so SizeChangedLayoutNotifier misses it.
+    final dpi = MediaQuery.devicePixelRatioOf(context);
+    if (_lastReportedDpi != null && _lastReportedDpi != dpi) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          _reportSurfaceSize(context);
+        }
+      });
+    }
+
     // The compositor shrinks the window while the keyboard is open, but the
     // app keeps the webview at full height, so the keyboard covers its
     // bottom. Re-check the focused field whenever the window size changes.
@@ -1021,7 +1066,7 @@ class WebViewState extends State<WebView> with WebeViewTextInput {
   }
 
   void _reportSurfaceSize(BuildContext context) async {
-    double dpi = MediaQuery.of(context).devicePixelRatio;
+    double dpi = MediaQuery.devicePixelRatioOf(context);
     final box = _key.currentContext?.findRenderObject() as RenderBox?;
     if (box != null) {
       final size = Size(box.size.width, box.size.height);
@@ -1053,7 +1098,7 @@ class StaticWebView extends StatelessWidget {
         if (!initialized) {
           return controller.loadingWidget;
         }
-        return Texture(textureId: controller.textureId);
+        return controller._buildSurface();
       },
     );
   }

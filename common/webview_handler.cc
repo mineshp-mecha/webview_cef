@@ -21,6 +21,9 @@
 #include "include/wrapper/cef_closure_task.h"
 #include "include/wrapper/cef_helpers.h"
 
+#include <algorithm>
+#include <cmath>
+#include <cstdlib>
 #include <sstream>
 
 // std::to_string fails for ints on Ubuntu 24.04:
@@ -53,6 +56,45 @@ WebviewHandler::~WebviewHandler() {
     js_callbacks_.clear();
 }
 
+namespace {
+// HiDPI: CEF's accelerated OSR path ignores CefScreenInfo::device_scale_factor
+// on Linux and always renders at view size. So the view is made |dpi| times
+// larger than the Flutter widget (physical pixels) and the page zoomed by
+// |dpi| to keep its CSS layout. Coordinates entering CEF are scaled up by
+// ToView; view coordinates leaving it are scaled down by ToLogical.
+int ToView(int logical, float dpi) {
+    return static_cast<int>(std::lround(logical * dpi));
+}
+
+int ToLogical(int view, float dpi) {
+    return dpi > 0 ? static_cast<int>(std::lround(view / dpi)) : view;
+}
+
+CefRect ToLogical(const CefRect &rect, float dpi) {
+    return CefRect(ToLogical(rect.x, dpi), ToLogical(rect.y, dpi),
+                   ToLogical(rect.width, dpi), ToLogical(rect.height, dpi));
+}
+
+// Chromium zoom factor is 1.2^level.
+double ZoomLevelFor(float dpi) {
+    return dpi > 0 ? std::log(dpi) / std::log(1.2) : 0.0;
+}
+
+// The scale CEF renders at: |dpi|, capped at kDefaultMaxRenderScale or
+// WEBVIEW_CEF_MAX_RENDER_SCALE (0 removes the cap). Raster cost grows with the
+// square of the scale, so a cap trades sharpness for speed on weak GPUs; the
+// compositor scales the frame up to fit.
+constexpr float kDefaultMaxRenderScale = 2.0f;
+
+float RenderScale(float dpi) {
+    static const float cap = [] {
+        const char* value = std::getenv("WEBVIEW_CEF_MAX_RENDER_SCALE");
+        return value ? std::strtof(value, nullptr) : kDefaultMaxRenderScale;
+    }();
+    return cap >= 1.0f ? std::min(dpi, cap) : dpi;
+}
+}  // namespace
+
 bool WebviewHandler::OnProcessMessageReceived(
     CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame,
      CefProcessId source_process, CefRefPtr<CefProcessMessage> message)
@@ -62,9 +104,14 @@ bool WebviewHandler::OnProcessMessageReceived(
     {
         current_focused_browser_ = browser;
         bool editable = message->GetArgumentList()->GetBool(0);
-        onFocusedNodeChangeMessage(browser->GetIdentifier(), editable);
-        if (editable) {
-            onImeCompositionRangeChangedMessage(browser->GetIdentifier(), message->GetArgumentList()->GetInt(1), message->GetArgumentList()->GetInt(2), message->GetArgumentList()->GetInt(3));
+        if (onFocusedNodeChangeMessage) {
+            onFocusedNodeChangeMessage(browser->GetIdentifier(), editable);
+        }
+        if (editable && onImeCompositionRangeChangedMessage) {
+            auto bit = browser_map_.find(browser->GetIdentifier());
+            const float dpi = bit != browser_map_.end() ? bit->second.dpi : 1.0f;
+            auto args = message->GetArgumentList();
+            onImeCompositionRangeChangedMessage(browser->GetIdentifier(), ToLogical(args->GetInt(1), dpi), ToLogical(args->GetInt(2), dpi), ToLogical(args->GetInt(3), dpi));
         }
     }
     else if(message_name == kJSCallCppFunctionMessage)
@@ -215,6 +262,12 @@ void WebviewHandler::OnLoadError(CefRefPtr<CefBrowser> browser,
 
 void WebviewHandler::OnLoadStart(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame,
                                  CefLoadHandler::TransitionType transition_type) {
+    if (frame->IsMain()) {
+        auto it = browser_map_.find(browser->GetIdentifier());
+        if (it != browser_map_.end()) {
+            browser->GetHost()->SetZoomLevel(ZoomLevelFor(it->second.dpi));
+        }
+    }
     if(onLoadStart){
         onLoadStart(browser->GetIdentifier(), frame->GetURL());
     }
@@ -434,9 +487,13 @@ void WebviewHandler::sendScrollEvent(int browserId, int x, int y, int deltaX, in
     auto it = browser_map_.find(browserId);
     if (it != browser_map_.end())
     {
+        const float dpi = it->second.dpi;
         CefMouseEvent ev;
-        ev.x = x;
-        ev.y = y;
+        ev.x = ToView(x, dpi);
+        ev.y = ToView(y, dpi);
+        // Deltas are view pixels too; scaling keeps the CSS scroll distance.
+        deltaX = ToView(deltaX, dpi);
+        deltaY = ToView(deltaY, dpi);
 
 #ifndef __APPLE__
         // The scrolling direction on Windows and Linux is different from MacOS
@@ -451,7 +508,13 @@ void WebviewHandler::sendTouchEvent(int browserId, const CefTouchEvent &ev)
     auto it = browser_map_.find(browserId);
     if (it != browser_map_.end())
     {
-        it->second.browser->GetHost()->SendTouchEvent(ev);
+        const float dpi = it->second.dpi;
+        CefTouchEvent view_ev = ev;
+        view_ev.x = ev.x * dpi;
+        view_ev.y = ev.y * dpi;
+        view_ev.radius_x = ev.radius_x * dpi;
+        view_ev.radius_y = ev.radius_y * dpi;
+        it->second.browser->GetHost()->SendTouchEvent(view_ev);
     }
 }
 
@@ -459,10 +522,20 @@ void WebviewHandler::changeSize(int browserId, float a_dpi, int w, int h)
 {
     auto it = browser_map_.find(browserId);
     if (it != browser_map_.end()) {
-        it->second.dpi = a_dpi;
+        // |dpi| holds the render scale from here on; every view <-> logical
+        // conversion uses it, so a capped scale stays consistent.
+        const float scale = RenderScale(a_dpi);
+        const bool dpi_changed = it->second.dpi != scale;
+        std::cerr << "webview_cef: browser " << browserId << " view " << w << "x"
+                  << h << " @" << a_dpi << "x render @" << scale << "x -> CEF "
+                  << ToView(w, scale) << "x" << ToView(h, scale) << std::endl;
+        it->second.dpi = scale;
         it->second.width = w;
         it->second.height = h;
         it->second.browser->GetHost()->WasResized();
+        if (dpi_changed) {
+            it->second.browser->GetHost()->SetZoomLevel(ZoomLevelFor(scale));
+        }
     }
 }
 
@@ -471,8 +544,8 @@ void WebviewHandler::cursorClick(int browserId, int x, int y, bool up)
     auto it = browser_map_.find(browserId);
     if (it != browser_map_.end()) {
         CefMouseEvent ev;
-        ev.x = x;
-        ev.y = y;
+        ev.x = ToView(x, it->second.dpi);
+        ev.y = ToView(y, it->second.dpi);
         ev.modifiers = EVENTFLAG_LEFT_MOUSE_BUTTON;
         if(up && it->second.is_dragging) {
             it->second.browser->GetHost()->DragTargetDrop(ev);
@@ -489,8 +562,8 @@ void WebviewHandler::cursorMove(int browserId, int x , int y, bool dragging)
     auto it = browser_map_.find(browserId);
     if (it != browser_map_.end()) {
         CefMouseEvent ev;
-        ev.x = x;
-        ev.y = y;
+        ev.x = ToView(x, it->second.dpi);
+        ev.y = ToView(y, it->second.dpi);
         if(dragging) {
             ev.modifiers = EVENTFLAG_LEFT_MOUSE_BUTTON;
         }
@@ -530,7 +603,8 @@ void WebviewHandler::OnImeCompositionRangeChanged(CefRefPtr<CefBrowser> browser,
         if (it->second.is_ime_commit) {
             auto lastCharacter = character_bounds.back();
             it->second.prev_ime_position = lastCharacter;
-            onImeCompositionRangeChangedMessage(browser->GetIdentifier(), lastCharacter.x + lastCharacter.width, lastCharacter.y + lastCharacter.height, lastCharacter.height);
+            const float dpi = it->second.dpi;
+            onImeCompositionRangeChangedMessage(browser->GetIdentifier(), ToLogical(lastCharacter.x + lastCharacter.width, dpi), ToLogical(lastCharacter.y + lastCharacter.height, dpi), ToLogical(lastCharacter.height, dpi));
             it->second.is_ime_commit = false;
         }
         else
@@ -538,7 +612,8 @@ void WebviewHandler::OnImeCompositionRangeChanged(CefRefPtr<CefBrowser> browser,
             auto firstCharacter = character_bounds.front();
             if (firstCharacter != it->second.prev_ime_position) {
                 it->second.prev_ime_position = firstCharacter;
-                onImeCompositionRangeChangedMessage(browser->GetIdentifier(), firstCharacter.x, firstCharacter.y + firstCharacter.height, firstCharacter.height);
+                const float dpi = it->second.dpi;
+                onImeCompositionRangeChangedMessage(browser->GetIdentifier(), ToLogical(firstCharacter.x, dpi), ToLogical(firstCharacter.y + firstCharacter.height, dpi), ToLogical(firstCharacter.height, dpi));
             }
         }
     }
@@ -892,22 +967,13 @@ void WebviewHandler::GetViewRect(CefRefPtr<CefBrowser> browser, CefRect &rect) {
     }
     rect.x = rect.y = 0;
     
-    if (it->second.width < 1) {
-        rect.width = 1;
-    } else {
-        rect.width = it->second.width;
-    }
-    
-    if (it->second.height < 1) {
-        rect.height = 1;
-    } else {
-        rect.height = it->second.height;
-    }
+    rect.width = std::max(1, ToView(it->second.width, it->second.dpi));
+    rect.height = std::max(1, ToView(it->second.height, it->second.dpi));
 }
 
 bool WebviewHandler::GetScreenInfo(CefRefPtr<CefBrowser> browser, CefScreenInfo& screen_info) {
-    //todo: hi dpi support
-    screen_info.device_scale_factor  = browser_map_[browser->GetIdentifier()].dpi;
+    // HiDPI is done by view size + page zoom (see ToView); the accelerated OSR
+    // path ignores device_scale_factor, so CEF keeps its default of 1.
     return false;
 }
 
@@ -1014,8 +1080,6 @@ void WebviewHandler::OnPaint(CefRefPtr<CefBrowser> browser, CefRenderHandler::Pa
                     png_destroy_write_struct(&png_ptr, &info_ptr);
                 }).detach();
             }
-            it->second.width = w;
-            it->second.height = h;
         }
         
         if (onPaintCallback != nullptr) {
@@ -1024,18 +1088,69 @@ void WebviewHandler::OnPaint(CefRefPtr<CefBrowser> browser, CefRenderHandler::Pa
     }
 }
 
+void WebviewHandler::OnPopupShow(CefRefPtr<CefBrowser> browser, bool show)
+{
+    auto it = browser_map_.find(browser->GetIdentifier());
+    if (it == browser_map_.end()) {
+        return;
+    }
+    it->second.popup_visible = show;
+    if (!show) {
+        it->second.popup_rect = CefRect();
+        // The popup area was never part of the view frame, so nothing needs
+        // repainting; the host just stops drawing the popup.
+    }
+    if (onPopupChanged) {
+        onPopupChanged(browser->GetIdentifier(), show,
+                       ToLogical(it->second.popup_rect, it->second.dpi));
+    }
+}
+
+void WebviewHandler::OnPopupSize(CefRefPtr<CefBrowser> browser, const CefRect& rect)
+{
+    auto it = browser_map_.find(browser->GetIdentifier());
+    if (it == browser_map_.end()) {
+        return;
+    }
+    it->second.popup_rect = rect;
+    if (it->second.popup_visible && onPopupChanged) {
+        onPopupChanged(browser->GetIdentifier(), true,
+                       ToLogical(rect, it->second.dpi));
+    }
+}
+
 void WebviewHandler::OnAcceleratedPaint(CefRefPtr<CefBrowser> browser, CefRenderHandler::PaintElementType type,
                                         const CefRenderHandler::RectList &dirtyRects, const CefAcceleratedPaintInfo &info)
 {
 #ifdef WEBVIEW_CEF_GPU_TEXTURE
+#if defined(OS_LINUX)
+    if (type == PET_POPUP)
+    {
+        auto it = browser_map_.find(browser->GetIdentifier());
+        if (it != browser_map_.end() && it->second.popup_visible &&
+            onAcceleratedPopupPaintCallback != nullptr)
+        {
+            // Popup frames are sized like the popup rect, in view pixels.
+            const CefRect &rect = it->second.popup_rect;
+            onAcceleratedPopupPaintCallback(browser->GetIdentifier(), info,
+                                            dirtyRects, rect.width, rect.height);
+        }
+        return;
+    }
+#else
+    if (type == PET_POPUP)
+    {
+        return;
+    }
+#endif
     if (!browser->IsPopup() && onAcceleratedPaintCallback != nullptr)
     {
         received_accelerated_frame_ = true;
         int w = 0, h = 0;
         auto it = browser_map_.find(browser->GetIdentifier());
         if (it != browser_map_.end()) {
-            w = it->second.width;
-            h = it->second.height;
+            w = ToView(it->second.width, it->second.dpi);
+            h = ToView(it->second.height, it->second.dpi);
             // A produced frame means the browser is render/input-ready. With
             // external_begin_frame a SetFocus issued right after creation can be
             // dropped (the browser wasn't ready yet), which left the webview

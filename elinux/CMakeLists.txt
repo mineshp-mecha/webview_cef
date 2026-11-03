@@ -34,6 +34,8 @@ set(PLUGIN_NAME "webview_cef_plugin")
 add_library(${PLUGIN_NAME} SHARED
   "webview_cef_plugin.cc"
   "webview_cef_texture.h"
+  "webview_subsurface.cc"
+  "webview_subsurface.h"
   "${CMAKE_CURRENT_SOURCE_DIR}/../common/webview_app.cc"
   "${CMAKE_CURRENT_SOURCE_DIR}/../common/webview_app.h"
   "${CMAKE_CURRENT_SOURCE_DIR}/../common/webview_handler.cc"
@@ -57,6 +59,30 @@ option(WEBVIEW_CEF_GPU_TEXTURE "Use the eLinux accelerated EGLImage texture path
 if(WEBVIEW_CEF_GPU_TEXTURE)
   target_compile_definitions(${PLUGIN_NAME} PRIVATE WEBVIEW_CEF_GPU_TEXTURE)
 endif()
+
+# Wayland subsurface presentation (WEBVIEW_CEF_SUBSURFACE=1 at runtime).
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(WAYLAND_CLIENT REQUIRED IMPORTED_TARGET wayland-client)
+pkg_check_modules(LIBDRM REQUIRED IMPORTED_TARGET libdrm)
+pkg_get_variable(WAYLAND_PROTOCOLS_DIR wayland-protocols pkgdatadir)
+find_program(WAYLAND_SCANNER NAMES wayland-scanner REQUIRED)
+set(PROTOCOL_OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/protocols")
+file(MAKE_DIRECTORY "${PROTOCOL_OUT_DIR}")
+foreach(protocol linux-dmabuf/linux-dmabuf-v1 viewporter/viewporter)
+  get_filename_component(protocol_name ${protocol} NAME)
+  set(protocol_xml "${WAYLAND_PROTOCOLS_DIR}/stable/${protocol}.xml")
+  set(protocol_header "${PROTOCOL_OUT_DIR}/${protocol_name}-client-protocol.h")
+  set(protocol_code "${PROTOCOL_OUT_DIR}/${protocol_name}-protocol.c")
+  add_custom_command(
+    OUTPUT "${protocol_header}" "${protocol_code}"
+    COMMAND ${WAYLAND_SCANNER} client-header "${protocol_xml}" "${protocol_header}"
+    COMMAND ${WAYLAND_SCANNER} private-code "${protocol_xml}" "${protocol_code}"
+    DEPENDS "${protocol_xml}" VERBATIM)
+  target_sources(${PLUGIN_NAME} PRIVATE "${protocol_header}" "${protocol_code}")
+endforeach()
+target_include_directories(${PLUGIN_NAME} PRIVATE "${PROTOCOL_OUT_DIR}")
+target_link_libraries(${PLUGIN_NAME} PRIVATE
+  PkgConfig::WAYLAND_CLIENT PkgConfig::LIBDRM)
 
 target_include_directories(${PLUGIN_NAME} INTERFACE
   "${CMAKE_CURRENT_SOURCE_DIR}/include")

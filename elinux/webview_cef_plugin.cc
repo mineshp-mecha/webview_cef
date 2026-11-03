@@ -9,6 +9,8 @@
 
 #include <atomic>
 #include <algorithm>
+#include <cmath>
+#include <cstdlib>
 #include <chrono>
 #include <condition_variable>
 #include <cstring>
@@ -20,18 +22,34 @@
 
 #include <webview_plugin.h>
 #include "webview_cef_texture.h"
+#include "webview_subsurface.h"
 
 std::unordered_map<int64_t, std::shared_ptr<webview_cef::WebviewPlugin>> webviewPlugins;
 
+// Opt-in while the subsurface path is a prototype.
+static bool SubsurfaceRequested() {
+  const char* value = std::getenv("WEBVIEW_CEF_SUBSURFACE");
+  return value && std::strcmp(value, "1") == 0;
+}
+
 class WebviewTextureRenderer : public webview_cef::WebviewTexture {
  public:
-  WebviewTextureRenderer(flutter::TextureRegistrar* registrar)
+  WebviewTextureRenderer(flutter::TextureRegistrar* registrar,
+                         FlutterDesktopViewRef view)
       : registrar_(registrar) {
     texture_ = std::make_unique<WebviewCefTexture>();
     texture_->textureId =
         registrar_->RegisterTexture(texture_->texture_variant.get());
     textureId = texture_->textureId;
+#ifdef WEBVIEW_CEF_GPU_TEXTURE
+    if (view && SubsurfaceRequested()) {
+      subsurface_ = webview_cef::WebviewSubsurface::Create(view);
+    }
+#endif
   }
+
+  // Non-null when frames go to a Wayland subsurface instead of the texture.
+  webview_cef::WebviewSubsurface* subsurface() { return subsurface_.get(); }
 
   ~WebviewTextureRenderer() override {
     registrar_->UnregisterTexture(texture_->textureId);
@@ -66,6 +84,10 @@ class WebviewTextureRenderer : public webview_cef::WebviewTexture {
     if (plane.stride < static_cast<uint32_t>(width * 4) ||
         plane.size < required_size)
     {
+      return;
+    }
+    if (subsurface_) {
+      subsurface_->Present(info, dirtyRects, width, height);
       return;
     }
 
@@ -129,10 +151,38 @@ class WebviewTextureRenderer : public webview_cef::WebviewTexture {
     CefRenderHandler::RectList emptyList;
     onAcceleratedFrame(info, emptyList, width, height);
   }
+
+  // Popups are only drawn on the subsurface path; the texture path has
+  // nowhere to put them.
+  void onAcceleratedPopupFrame(const CefAcceleratedPaintInfo &info,
+                               const CefRenderHandler::RectList &dirtyRects,
+                               int32_t width, int32_t height) override
+  {
+    if (!subsurface_ || info.plane_count != 1 || info.planes[0].fd < 0 ||
+        width <= 0 || height <= 0)
+    {
+      return;
+    }
+    const auto &plane = info.planes[0];
+    if (plane.stride < static_cast<uint32_t>(width * 4) ||
+        plane.size < static_cast<size_t>(plane.stride) * height)
+    {
+      return;
+    }
+    subsurface_->PresentPopup(info, dirtyRects, width, height);
+  }
 #endif
+
+  void onPopupChanged(bool visible, const CefRect &rect) override
+  {
+    if (subsurface_) {
+      subsurface_->SetPopup(visible, rect);
+    }
+  }
 private:
   flutter::TextureRegistrar* registrar_;
   std::unique_ptr<WebviewCefTexture> texture_;
+  std::unique_ptr<webview_cef::WebviewSubsurface> subsurface_;
 };
 
 // ── Value conversion helpers (unchanged) ────────────────────────────────────
@@ -217,7 +267,8 @@ class WebviewCefPlugin : public flutter::Plugin {
         &flutter::StandardMethodCodec::GetInstance());
 
     auto plugin = std::make_unique<WebviewCefPlugin>(
-        registrar->texture_registrar(), std::move(channel));
+        registrar->texture_registrar(), std::move(channel),
+        reinterpret_cast<FlutterDesktopViewRef>(window_id));
 
     // Populate the map and set the window_id_
     plugin->SetWindowId(window_id);
@@ -225,8 +276,10 @@ class WebviewCefPlugin : public flutter::Plugin {
   }
 
   WebviewCefPlugin(flutter::TextureRegistrar* texture_registrar,
-                   std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> channel)
+                   std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> channel,
+                   FlutterDesktopViewRef view)
       : texture_registrar_(texture_registrar),
+        view_(view),
         channel_(std::move(channel)),
         plugin_(std::make_shared<webview_cef::WebviewPlugin>()) {
 
@@ -243,7 +296,13 @@ class WebviewCefPlugin : public flutter::Plugin {
     });
 
     plugin_->setCreateTextureFunc([this]() {
-      auto renderer = std::make_shared<WebviewTextureRenderer>(texture_registrar_);
+      auto renderer =
+          std::make_shared<WebviewTextureRenderer>(texture_registrar_, view_);
+      {
+        // Browsers are created on the CEF UI thread.
+        std::lock_guard<std::mutex> lock(renderers_mutex_);
+        renderers_[renderer->textureId] = renderer;
+      }
       return std::dynamic_pointer_cast<webview_cef::WebviewTexture>(renderer);
     });
   }
@@ -267,6 +326,9 @@ class WebviewCefPlugin : public flutter::Plugin {
          std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result) {
 
        const std::string& method = call.method_name();
+       if (HandleSubsurfaceCall(call, result)) {
+         return;
+       }
        WValue* args = decode_to_wvalue(
            call.arguments() ? *call.arguments() : flutter::EncodableValue());
 
@@ -287,7 +349,58 @@ class WebviewCefPlugin : public flutter::Plugin {
            });
      }
 
+  // Handles the eLinux-only subsurface methods, keyed by texture id:
+  //   subsurfaceEnabled [textureId] -> bool
+  //   setSubsurfaceRect [textureId, x, y, width, height, visible]
+  bool HandleSubsurfaceCall(
+      const flutter::MethodCall<flutter::EncodableValue>& call,
+      std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>>& result) {
+    const std::string& method = call.method_name();
+    if (method != "subsurfaceEnabled" && method != "setSubsurfaceRect") {
+      return false;
+    }
+    const auto* list = std::get_if<flutter::EncodableList>(call.arguments());
+    if (!list || list->empty()) {
+      result->Error("bad_args", method);
+      return true;
+    }
+    std::shared_ptr<WebviewTextureRenderer> renderer;
+    {
+      std::lock_guard<std::mutex> lock(renderers_mutex_);
+      auto it = renderers_.find((*list)[0].LongValue());
+      if (it != renderers_.end()) {
+        renderer = it->second.lock();
+        if (!renderer) {
+          renderers_.erase(it);
+        }
+      }
+    }
+    webview_cef::WebviewSubsurface* subsurface =
+        renderer ? renderer->subsurface() : nullptr;
+
+    if (method == "subsurfaceEnabled") {
+      result->Success(flutter::EncodableValue(subsurface != nullptr));
+      return true;
+    }
+    if (list->size() < 6) {
+      result->Error("bad_args", method);
+      return true;
+    }
+    if (subsurface) {
+      auto number = [&](size_t i) {
+        return static_cast<int32_t>(std::lround(std::get<double>((*list)[i])));
+      };
+      subsurface->SetRect(number(1), number(2), number(3), number(4),
+                          std::get<bool>((*list)[5]));
+    }
+    result->Success();
+    return true;
+  }
+
   flutter::TextureRegistrar* texture_registrar_;
+  FlutterDesktopViewRef view_;
+  std::mutex renderers_mutex_;
+  std::unordered_map<int64_t, std::weak_ptr<WebviewTextureRenderer>> renderers_;
   std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> channel_;
   std::shared_ptr<webview_cef::WebviewPlugin> plugin_;
   int64_t window_id_ = 0;
