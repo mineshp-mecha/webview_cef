@@ -133,6 +133,11 @@ class WebViewController extends ValueNotifier<bool> {
   /// Long-press text selection on the page (handles and quick menu).
   final WebTouchSelection touchSelection = WebTouchSelection();
 
+  /// Height of app UI drawn over the bottom of the webview while the
+  /// on-screen keyboard is open (e.g. a bottom bar above the keyboard).
+  /// A focused field is kept above it as well as above the keyboard.
+  double bottomOverlayInset = 0;
+
   /// Runs [action] on the current long-press selection.
   Future<void> quickMenuAction(QuickMenuAction action) async {
     if (_isDisposed) {
@@ -578,6 +583,7 @@ class WebViewState extends State<WebView> with WebeViewTextInput {
         detachTextInputClient();
       }
       _controller._focusEditable = editable;
+      _keepFocusedFieldVisible();
     };
 
     _controller._onImeCompositionRangeChangedMessage = (x, y, height) {
@@ -743,6 +749,7 @@ class WebViewState extends State<WebView> with WebeViewTextInput {
       canRequestFocus: true,
       debugLabel: "webview_cef",
       onFocusChange: (focused) {
+        _keepFocusedFieldVisible();
         _composingText = '';
         currentTextEditingValue = const TextEditingValue();
         if (focused) {
@@ -760,16 +767,19 @@ class WebViewState extends State<WebView> with WebeViewTextInput {
       onKeyEvent: _onKeyEvent,
       child: SizedBox.expand(
         key: _key,
-        child: Stack(
-          children: [
-            Positioned.fill(child: _buildInner()),
-            Positioned.fill(
-              child: WebTouchSelectionOverlay(
-                selection: _controller.touchSelection,
-                onAction: _controller.quickMenuAction,
+        child: Transform.translate(
+          offset: Offset(0, -_panOffset),
+          child: Stack(
+            children: [
+              Positioned.fill(child: _buildInner()),
+              Positioned.fill(
+                child: WebTouchSelectionOverlay(
+                  selection: _controller.touchSelection,
+                  onAction: _controller.quickMenuAction,
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -936,6 +946,80 @@ class WebViewState extends State<WebView> with WebeViewTextInput {
     );
   }
 
+  /// Gap kept between a focused field and the keyboard.
+  static const double _fieldMargin = 8;
+
+  /// How far the webview is shifted up to show a focused field the page
+  /// can't scroll above the keyboard.
+  double _panOffset = 0;
+  int _fieldVisibleRequest = 0;
+  Size? _windowSize;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // The compositor shrinks the window while the keyboard is open, but the
+    // app keeps the webview at full height, so the keyboard covers its
+    // bottom. Re-check the focused field whenever the window size changes.
+    final size = MediaQuery.sizeOf(context);
+    if (size != _windowSize) {
+      _windowSize = size;
+      WidgetsBinding.instance
+          .addPostFrameCallback((_) => _keepFocusedFieldVisible());
+    }
+  }
+
+  /// Height of the webview's bottom part that is behind the keyboard (below
+  /// the window's bottom edge) or under [WebViewController.bottomOverlayInset].
+  double _obscuredBottom(RenderBox box) {
+    final windowHeight = MediaQuery.sizeOf(context).height;
+    final keyboard =
+        box.localToGlobal(Offset(0, box.size.height)).dy - windowHeight;
+    return keyboard > 0 ? keyboard + _controller.bottomOverlayInset : 0;
+  }
+
+  /// Keeps the focused field above the keyboard: scrolls the page first,
+  /// then shifts the webview up by whatever the page couldn't scroll (last
+  /// element on the page, fixed bars, pages that don't scroll).
+  Future<void> _keepFocusedFieldVisible() async {
+    final request = ++_fieldVisibleRequest;
+    final box = _key.currentContext?.findRenderObject() as RenderBox?;
+    if (!mounted || box == null || !box.hasSize) return;
+    // Only for a page field: when focus is in the app (e.g. its address
+    // bar) the page must stay put.
+    final obscured = _focusNode.hasFocus && _controller._focusEditable
+        ? _obscuredBottom(box)
+        : 0.0;
+    if (obscured <= 0) {
+      _setPanOffset(0);
+      return;
+    }
+    final visibleBottom = box.size.height - obscured;
+    // scroll-margin-bottom makes scrollIntoView keep the field above the
+    // obscured part, in every scroll container. A field taller than half
+    // the visible area only needs its top part shown.
+    final result = await _controller.evaluateJavascript('''(() => {
+  const e = document.activeElement;
+  if (!e || e === document.body) return -1;
+  const margin = e.style.scrollMarginBottom;
+  e.style.scrollMarginBottom = '${obscured + _fieldMargin}px';
+  e.scrollIntoView({block: 'nearest', behavior: 'instant'});
+  e.style.scrollMarginBottom = margin;
+  const r = e.getBoundingClientRect();
+  return Math.min(r.bottom, r.top + ${visibleBottom / 2});
+})()''');
+    if (!mounted || request != _fieldVisibleRequest || result is! num) return;
+    if (result < 0) return;
+    final remaining = result + _fieldMargin - visibleBottom;
+    _setPanOffset(remaining.clamp(0.0, obscured).toDouble());
+  }
+
+  void _setPanOffset(double offset) {
+    if (offset != _panOffset) {
+      setState(() => _panOffset = offset);
+    }
+  }
+
   void _reportSurfaceSize(BuildContext context) async {
     double dpi = MediaQuery.of(context).devicePixelRatio;
     final box = _key.currentContext?.findRenderObject() as RenderBox?;
@@ -953,6 +1037,7 @@ class WebViewState extends State<WebView> with WebeViewTextInput {
 
   Size? _lastReportedSize;
   double? _lastReportedDpi;
+
 }
 
 class StaticWebView extends StatelessWidget {
