@@ -2,6 +2,8 @@
 #define WEBVIEW_CEF_TEXTURE_H_
 
 #include <flutter/texture_registrar.h>
+
+#include "../common/fps_debug.h"  // FPSDBG
 #include <flutter_texture_registrar.h>
 
 #include <cstdint>
@@ -151,6 +153,10 @@ struct WebviewCefTexture
       retired_fds.clear();
       egl_image = new_image;
       uploaded_serial = frame_serial;
+      {  // FPSDBG: a new CEF frame picked up by a Flutter frame.
+        static fpsdbg::Counter counter("texture shown");
+        counter.Tick();
+      }
       egl_image_descriptor.egl_image = egl_image;
       egl_image_descriptor.width = static_cast<size_t>(width);
       egl_image_descriptor.height = static_cast<size_t>(height);

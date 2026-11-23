@@ -3,6 +3,7 @@
 // can be found in the LICENSE file.
 
 #include "webview_handler.h"
+#include "fps_debug.h"  // FPSDBG
 
 #include <sstream>
 #include <string>
@@ -1122,6 +1123,10 @@ void WebviewHandler::OnPopupSize(CefRefPtr<CefBrowser> browser, const CefRect& r
 void WebviewHandler::OnAcceleratedPaint(CefRefPtr<CefBrowser> browser, CefRenderHandler::PaintElementType type,
                                         const CefRenderHandler::RectList &dirtyRects, const CefAcceleratedPaintInfo &info)
 {
+    if (type == PET_VIEW) {  // FPSDBG
+        static fpsdbg::Counter counter("cef paints");
+        counter.Tick();
+    }
 #ifdef WEBVIEW_CEF_GPU_TEXTURE
 #if defined(OS_LINUX)
     if (type == PET_POPUP)

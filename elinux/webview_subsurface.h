@@ -8,8 +8,11 @@
 #include <cstdint>
 #include <memory>
 #include <unordered_map>
+#include <vector>
 
 struct wl_buffer;
+struct wl_callback;
+struct wl_callback_listener;
 struct wl_buffer_listener;
 struct wl_display;
 struct wl_event_queue;
@@ -43,7 +46,9 @@ class WebviewSubsurface {
                bool visible);
 
   // Attaches the frame and damages only |dirty_rects| (buffer pixels). Called
-  // on the CEF UI thread; |info| is valid only during the call.
+  // on the CEF UI thread; |info| is valid only during the call. Paced by the
+  // compositor's frame callbacks: while the previous frame is not done, only
+  // the newest frame is kept and committed when the callback arrives.
   void Present(const CefAcceleratedPaintInfo& info,
                const CefRenderHandler::RectList& dirty_rects,
                int32_t width,
@@ -75,20 +80,56 @@ class WebviewSubsurface {
     bool needs_full_damage = true;
   };
 
+  // A CEF frame waiting for the compositor's frame callback. Holds its own
+  // dup of the DMA-BUF fd so the buffer outlives CEF's paint callback.
+  struct PendingFrame {
+    int fd = -1;
+    uint32_t offset = 0;
+    uint32_t stride = 0;
+    uint64_t modifier = 0;
+    cef_color_type_t format = CEF_COLOR_TYPE_BGRA_8888;
+    int32_t width = 0;
+    int32_t height = 0;
+    // Union of the dirty rects of every frame replaced while waiting.
+    CefRenderHandler::RectList damage;
+    bool full_damage = false;
+  };
+
   explicit WebviewSubsurface(std::shared_ptr<WaylandSubsurfaceContext> context);
 
   static void OnBufferRelease(void* data, wl_buffer* buffer);
   static const wl_buffer_listener kBufferListener;
+  static void OnFrameDone(void* data, wl_callback* callback, uint32_t time);
+  static const wl_callback_listener kFrameListener;
 
-  // All of these require |context_->mutex|, which also serialises the release
-  // listener: it only runs from dispatches made under that lock.
+  // All of these require the subsurface mutex, which the listeners (run on
+  // the context's dispatch thread) take too.
   void InitLayer(Layer& layer, wl_surface* parent);
   void DestroyLayer(Layer& layer);
   // Wraps the frame in a wl_buffer and makes it |layer|'s current one.
   bool SetFrame(Layer& layer,
-                const CefAcceleratedPaintInfo& info,
+                int fd,
+                uint32_t offset,
+                uint32_t stride,
+                uint64_t modifier,
+                cef_color_type_t format,
                 int32_t width,
                 int32_t height);
+  // Commits a view frame and asks for the compositor's frame callback.
+  // Null |dirty_rects| damages the whole buffer.
+  void CommitViewFrame(int fd,
+                       uint32_t offset,
+                       uint32_t stride,
+                       uint64_t modifier,
+                       cef_color_type_t format,
+                       int32_t width,
+                       int32_t height,
+                       const CefRenderHandler::RectList* dirty_rects);
+  void CommitPendingFrame();
+  void DropPendingFrame();
+  // Forgets an outstanding frame callback, e.g. once the surface is hidden
+  // and the compositor may never send it.
+  void CancelFrameCallback();
   // Attaches |layer.current| scaled to |width| x |height| logical pixels.
   // Null |dirty_rects| damages the whole buffer.
   void Show(Layer& layer,
@@ -101,6 +142,11 @@ class WebviewSubsurface {
   std::shared_ptr<WaylandSubsurfaceContext> context_;
   Layer view_;
   Layer popup_;
+  // The view's outstanding frame callback, and when it was requested.
+  wl_callback* frame_callback_ = nullptr;
+  int64_t frame_requested_ms_ = 0;
+  PendingFrame pending_;
+  bool has_pending_ = false;
 
   int32_t x_ = 0;
   int32_t y_ = 0;

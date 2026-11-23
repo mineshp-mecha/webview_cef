@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart'; // FPSDBG
 import 'package:flutter/services.dart';
 
 import 'webview_events_listener.dart';
@@ -604,9 +605,43 @@ class WebViewState extends State<WebView> with WebeViewTextInput {
     _resetEditingState();
   }
 
+  // FPSDBG: temporary Flutter frame-rate log, remove before commit.
+  static bool _fpsDbgStarted = false;
+  static void _startFpsDbg() {
+    if (_fpsDbgStarted) return;
+    _fpsDbgStarted = true;
+    var windowStart = DateTime.now();
+    final build = <int>[];
+    final raster = <int>[];
+    SchedulerBinding.instance.addTimingsCallback((timings) {
+      for (final t in timings) {
+        build.add(t.buildDuration.inMicroseconds);
+        raster.add(t.rasterDuration.inMicroseconds);
+      }
+      final now = DateTime.now();
+      final elapsed = now.difference(windowStart).inMilliseconds;
+      if (elapsed < 1000) return;
+      String stat(List<int> v) {
+        final avg = v.reduce((a, b) => a + b) / v.length / 1000;
+        final max = v.reduce((a, b) => a > b ? a : b) / 1000;
+        return '${avg.toStringAsFixed(1)}/${max.toStringAsFixed(1)}ms';
+      }
+
+      if (elapsed < 2500 && build.isNotEmpty) {
+        debugPrint('[FPSDBG] flutter frames     '
+            '${(build.length * 1000 / elapsed).toStringAsFixed(1)}/s '
+            'build avg/max ${stat(build)} raster avg/max ${stat(raster)}');
+      }
+      windowStart = now;
+      build.clear();
+      raster.clear();
+    });
+  }
+
   @override
   void initState() {
     super.initState();
+    _startFpsDbg(); // FPSDBG
     _controller._onFocusedNodeChangeMessage = (editable) {
       _composingText = '';
       currentTextEditingValue = const TextEditingValue();
